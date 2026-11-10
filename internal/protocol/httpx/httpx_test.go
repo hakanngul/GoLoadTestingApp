@@ -544,3 +544,83 @@ func BenchmarkIterate(b *testing.B) {
 		}
 	})
 }
+
+func TestRedirectTargetInFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/abs":
+			w.Header().Set("Location", "https://www.example.test:443/")
+			w.WriteHeader(http.StatusMovedPermanently)
+		case "/rel":
+			http.Redirect(w, r, "/next?x=1", http.StatusFound)
+		default:
+			http.Error(w, "nope", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	status200 := []scenario.Assert{{Type: scenario.AssertStatus, Op: "eq", Value: "200"}}
+
+	r := run(newExec(t, srv.URL, scenario.Step{Path: "/abs", Assert: status200}), nil)
+	want := "assert status: got 301, want eq 200 (redirects to https://www.example.test:443/)"
+	if len(r) != 1 || r[0].Err == nil || r[0].Err.Error() != want {
+		t.Fatalf("abs: %+v, want %q", r, want)
+	}
+	// Relative Location is resolved against the request URL.
+	r = run(newExec(t, srv.URL, scenario.Step{Path: "/rel", Assert: status200}), nil)
+	if want := "(redirects to " + srv.URL + "/next?x=1)"; r[0].Err == nil || !strings.HasSuffix(r[0].Err.Error(), want) {
+		t.Fatalf("rel: %v, want suffix %q", r[0].Err, want)
+	}
+	// Without a status assertion a 4xx message stays as before.
+	r = run(newExec(t, srv.URL, scenario.Step{Path: "/missing"}), nil)
+	if r[0].Err == nil || r[0].Err.Error() != "status 404" {
+		t.Fatalf("404: %v", r[0].Err)
+	}
+}
+
+func TestTraceDoesNotChangeOutcome(t *testing.T) {
+	srv := testServer(t)
+	var traces []*Trace
+	sc := &scenario.Scenario{Target: scenario.Target{BaseURL: srv.URL}, Steps: []scenario.Step{{
+		Name: "r", Path: "/redirect",
+		Assert: []scenario.Assert{{Type: scenario.AssertStatus, Op: "eq", Value: "200"}, {Type: scenario.AssertBodyContains, Op: "contains", Value: "zzz"}},
+	}}}
+	e, err := New(sc, Options{Trace: func(tr *Trace) { traces = append(traces, tr) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	res := run(e, nil)
+	if len(res) != 1 || res[0].Err == nil || !strings.HasPrefix(res[0].Err.Error(), "assert status: got 302") {
+		t.Fatalf("res = %+v", res)
+	}
+	if len(traces) != 1 {
+		t.Fatalf("traces = %d", len(traces))
+	}
+	tr := traces[0]
+	if !tr.Sent || tr.Status != 302 || tr.URL != srv.URL+"/redirect" || tr.Location != srv.URL+"/status/200" {
+		t.Errorf("trace = %+v", tr)
+	}
+	// Every check is evaluated for display, even after the first failure.
+	if len(tr.Checks) != 2 || tr.Checks[0].Pass || tr.Checks[1].Pass || tr.Checks[0].Desc != "status eq 200" {
+		t.Errorf("checks = %+v", tr.Checks)
+	}
+	if tr.Err != res[0].Err {
+		t.Errorf("trace err %v != result err %v", tr.Err, res[0].Err)
+	}
+}
+
+func TestCheckURLBlocksBeforeSending(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer srv.Close()
+	sc := &scenario.Scenario{Target: scenario.Target{BaseURL: srv.URL}, Steps: []scenario.Step{{Name: "s", Path: "/x"}}}
+	e, err := New(sc, Options{CheckURL: func(u string) error { return fmt.Errorf("blocked %s", u) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	res := run(e, nil)
+	if hits != 0 || res[0].Err == nil || res[0].Err.Error() != "build request: blocked "+srv.URL+"/x" {
+		t.Fatalf("hits=%d res=%+v", hits, res)
+	}
+}

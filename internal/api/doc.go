@@ -13,7 +13,21 @@
 //	DELETE /api/tests/{id}                   -> 204
 //	PUT    /api/tests/{id}/files/{name}      raw body (CSV, max 50 MiB) -> 204
 //	DELETE /api/tests/{id}/files/{name}      -> 204
-//	POST   /api/validate                     {yaml} -> model.ValidateResult (always 200)
+//	POST   /api/validate                     model.ValidateRequest {yaml, test_id?} -> model.ValidateResult (always 200;
+//	                                         warnings = {{var}} references no source defines; test_id lets the
+//	                                         server read the uploaded data file's header for CSV columns)
+//	POST   /api/tests/try                    model.TryRequest {yaml, test_id?} -> model.TryResult
+//	                                         "Test request": runs ONE iteration (auth login + each step once, in
+//	                                         order) through the same executors as runs and reports every step
+//	                                         (rendered URL, redacted headers, status, duration, selected response
+//	                                         headers, body snippet <= 8 KiB text, extracts, assertions) plus hints.
+//	                                         Stops at the first failing step (later steps: not_run). Uses the first
+//	                                         row of the test's data file (test_id; unsaved tests run without data,
+//	                                         see data_note). Target allowlist enforced like runs (rejection is a
+//	                                         hint, nothing is sent). Limits: 30 s total, scenario timeout per step,
+//	                                         first 20 steps, think times / ws hold skipped, 4 concurrent tries
+//	                                         server-wide (429 + Retry-After otherwise). 400 for invalid yaml,
+//	                                         404 for an unknown test_id.
 //
 //	POST   /api/tests/{id}/runs              model.StartRunRequest -> 201 model.Run
 //	GET    /api/runs?test_id=&limit=         -> []model.Run (newest first)

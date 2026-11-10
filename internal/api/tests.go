@@ -1,12 +1,16 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"io"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/data"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 )
@@ -147,19 +151,32 @@ func (s *server) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 
 // handleValidate parses a scenario and reports problems. It answers 200
 // for both valid and invalid scenarios; only a malformed request body is
-// a 400.
+// a 400. Warnings list {{var}} references no source defines; with test_id
+// the header of the test's uploaded data file is used for CSV columns.
 func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		YAML string `json:"yaml"`
-	}
+	var req model.ValidateRequest
 	if err := decodeJSON(w, r, &req); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
 	sc, err := scenario.Parse([]byte(req.YAML))
 	if err != nil {
-		writeJSON(w, http.StatusOK, model.ValidateResult{Valid: false, Errors: nonNil(validationMessages(err))})
+		writeJSON(w, http.StatusOK, model.ValidateResult{Valid: false, Errors: nonNil(validationMessages(err)), Warnings: []string{}})
 		return
+	}
+	var columns []string
+	known := sc.Data == nil
+	if sc.Data != nil && req.TestID != "" {
+		b, err := s.store.GetFile(r.Context(), req.TestID, filepath.Base(sc.Data.File))
+		if err == nil {
+			if h, err := data.Header(bytes.NewReader(b)); err == nil {
+				columns, known = h, true
+			}
+		}
+	}
+	warnings := []string{}
+	for _, is := range sc.CheckVars(columns, known) {
+		warnings = append(warnings, is.String())
 	}
 	writeJSON(w, http.StatusOK, model.ValidateResult{
 		Valid:    true,
@@ -167,5 +184,52 @@ func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		Model:    string(sc.Load.Model),
 		Duration: sc.Load.TotalDuration().Seconds(),
 		Steps:    len(sc.Steps),
+		Warnings: warnings,
 	})
+}
+
+// tryRunner is implemented by runners that can run trial iterations
+// (*runner.Manager).
+type tryRunner interface {
+	Try(ctx context.Context, test model.Test) (model.TryResult, error)
+}
+
+// handleTry runs one iteration of a (possibly unsaved) scenario and
+// reports every step with hints. At most maxConcurrentTries run at once.
+func (s *server) handleTry(w http.ResponseWriter, r *http.Request) {
+	tr, ok := s.runner.(tryRunner)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "test requests are not supported by this server")
+		return
+	}
+	var req model.TryRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	if strings.TrimSpace(req.YAML) == "" {
+		s.writeErr(w, r, badRequest("yaml must not be empty"))
+		return
+	}
+	select {
+	case s.trySem <- struct{}{}:
+		defer func() { <-s.trySem }()
+	default:
+		w.Header().Set("Retry-After", "2")
+		writeError(w, http.StatusTooManyRequests, "too many test requests in progress; try again in a moment")
+		return
+	}
+	test := model.Test{ID: req.TestID, YAML: req.YAML}
+	if req.TestID != "" {
+		if _, err := s.store.GetTest(r.Context(), req.TestID); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+	}
+	res, err := tr.Try(r.Context(), test)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }

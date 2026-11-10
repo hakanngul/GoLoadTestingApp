@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import { api, clearToken, getToken, onUnauthorized } from './api/client';
+import { ThemeToggle } from './components/ThemeToggle';
 import { BrandMark, Icon, Loading } from './components/ui';
 import { useAsync } from './lib/hooks';
 import { NotFound } from './pages/NotFound';
@@ -81,7 +82,11 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             )}
             <div className="sidebar-foot" title={health.error ? 'API unreachable' : 'API reachable'}>
               <span className={`dot ${health.loading ? '' : up ? 'ok' : 'down'}`} />
-              {health.loading ? 'connecting…' : up ? `API ${health.data?.version ?? ''}` : 'API unreachable'}
+              <span className="sidebar-foot-text">
+                {health.loading ? 'connecting…' : up ? `API ${health.data?.version ?? ''}` : 'API unreachable'}
+              </span>
+              <span className="grow" />
+              <ThemeToggle />
             </div>
           </div>
         </div>

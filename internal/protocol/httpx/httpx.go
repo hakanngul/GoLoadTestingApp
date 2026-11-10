@@ -62,6 +62,16 @@ type Options struct {
 	// DisableKeepAlives opens a new connection for every request, to
 	// measure connection setup cost or defeat sticky load balancing.
 	DisableKeepAlives bool
+
+	// CheckURL, if set, vets every rendered request URL before it is sent;
+	// an error fails the step without sending. Trial runs use it to apply
+	// the target allowlist to templated URLs.
+	CheckURL func(rawURL string) error
+	// Trace, if set, is called synchronously with a detailed record of
+	// every executed step, just before its Result is reported. Meant for
+	// single trial iterations (it buffers every body); leave nil in load
+	// runs.
+	Trace func(*Trace)
 }
 
 // Executor runs scenario iterations over HTTP. It is safe for concurrent
@@ -71,6 +81,9 @@ type Executor struct {
 	base    string // base URL without trailing slash
 	timeout time.Duration
 	steps   []step
+
+	checkURL func(string) error
+	trace    func(*Trace)
 }
 
 var _ protocol.Executor = (*Executor)(nil)
@@ -125,6 +138,9 @@ func New(sc *scenario.Scenario, opts Options) (*Executor, error) {
 		base:    base,
 		timeout: sc.Target.Timeout.Duration,
 		steps:   make([]step, len(sc.Steps)),
+
+		checkURL: opts.CheckURL,
+		trace:    opts.Trace,
 	}
 	if e.timeout <= 0 {
 		e.timeout = DefaultTimeout
@@ -297,8 +313,20 @@ func (e *Executor) Step(ctx context.Context, i int, vars map[string]string, star
 
 // do executes one step. extracted holds alternating var name / value
 // pairs, applied by the caller only if the step succeeded.
-func (e *Executor) do(ctx context.Context, st *step, vars map[string]string, start time.Time) (protocol.Result, []string) {
-	res := protocol.Result{Step: st.name}
+//
+// A failure of a 3xx response mentions where it redirects to, e.g.
+// "assert status: got 301, want eq 200 (redirects to https://host/)".
+func (e *Executor) do(ctx context.Context, st *step, vars map[string]string, start time.Time) (res protocol.Result, extracted []string) {
+	res.Step = st.name
+
+	var tr *Trace
+	if e.trace != nil {
+		tr = &Trace{Step: st.name, Method: st.method}
+		defer func() {
+			tr.Latency, tr.Err = res.Latency, res.Err
+			e.trace(tr)
+		}()
+	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
@@ -309,6 +337,19 @@ func (e *Executor) do(ctx context.Context, st *step, vars map[string]string, sta
 		res.Latency = time.Since(start)
 		return res, nil
 	}
+	if tr != nil {
+		tr.URL, tr.Host, tr.ReqHeader = req.URL.String(), req.Host, req.Header.Clone()
+		if st.body != "" {
+			tr.ReqBody = scenario.Render(st.body, vars)
+		}
+	}
+	if e.checkURL != nil {
+		if err := e.checkURL(req.URL.String()); err != nil {
+			res.Err = fmt.Errorf("build request: %w", err)
+			res.Latency = time.Since(start)
+			return res, nil
+		}
+	}
 
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -317,6 +358,9 @@ func (e *Executor) do(ctx context.Context, st *step, vars map[string]string, sta
 		return res, nil
 	}
 	res.Status = resp.StatusCode
+	if tr != nil {
+		tr.Sent, tr.Status, tr.RespHeader = true, resp.StatusCode, resp.Header.Clone()
+	}
 
 	// Read the body completely: needed for time-to-last-byte latency and
 	// for connection reuse.
@@ -325,7 +369,7 @@ func (e *Executor) do(ctx context.Context, st *step, vars map[string]string, sta
 		n     int64
 		trunc bool
 	)
-	if st.needBody {
+	if st.needBody || tr != nil {
 		buf = bufPool.Get().(*bytes.Buffer)
 		buf.Reset()
 		defer func() {
@@ -355,6 +399,10 @@ func (e *Executor) do(ctx context.Context, st *step, vars map[string]string, sta
 	if buf != nil {
 		r.body = buf.Bytes()
 	}
+	if tr != nil {
+		st.traceResponse(tr, &r, n)
+		tr.Location = redirectTarget(resp)
+	}
 
 	if !st.hasStatus && resp.StatusCode >= 400 {
 		res.Err = fmt.Errorf("status %d", resp.StatusCode)
@@ -362,23 +410,30 @@ func (e *Executor) do(ctx context.Context, st *step, vars map[string]string, sta
 	}
 	for i := range st.checks {
 		if err := st.checks[i].run(&r); err != nil {
-			res.Err = err
+			res.Err = withRedirect(err, resp)
 			return res, nil
 		}
 	}
-	var extracted []string
 	if len(st.extracts) > 0 {
 		extracted = make([]string, 0, 2*len(st.extracts))
 		for i := range st.extracts {
 			v, err := st.extracts[i].run(&r)
 			if err != nil {
-				res.Err = err
+				res.Err = withRedirect(err, resp)
 				return res, nil
 			}
 			extracted = append(extracted, st.extracts[i].varName, v)
 		}
 	}
 	return res, extracted
+}
+
+// withRedirect appends the redirect target of a 3xx response to err.
+func withRedirect(err error, resp *http.Response) error {
+	if loc := redirectTarget(resp); loc != "" {
+		return fmt.Errorf("%w (redirects to %s)", err, loc)
+	}
+	return err
 }
 
 func (e *Executor) newRequest(ctx context.Context, st *step, vars map[string]string) (*http.Request, error) {

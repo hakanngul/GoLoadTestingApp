@@ -157,6 +157,87 @@ export interface ValidateResult {
   model?: string;
   duration_s?: number;
   steps?: number;
+  /** Non-blocking problems, e.g. {{var}} references no source defines ("path: message"). */
+  warnings?: string[] | null;
+}
+
+// ---------- test request (POST /api/tests/try) ----------
+
+export type TryState = 'passed' | 'failed' | 'not_run';
+
+export interface TryHeader {
+  name: string;
+  value: string;
+}
+
+export interface TryExtract {
+  var: string;
+  source: string;
+  expr: string;
+  /** Truncated / masked. */
+  value?: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface TryAssertion {
+  assertion: string;
+  passed: boolean;
+  message?: string;
+}
+
+export interface TryMessage {
+  name: string;
+  duration_ms: number;
+  error?: string;
+}
+
+export interface TryStep {
+  name: string;
+  kind: 'http' | 'ws' | 'login';
+  /** Position in scenario steps; -1 = auth:login. */
+  index: number;
+  state: TryState;
+  method?: string;
+  url?: string;
+  request_headers: TryHeader[];
+  request_body?: string;
+  status: number;
+  duration_ms: number;
+  bytes: number;
+  response_headers: TryHeader[];
+  body?: string;
+  body_truncated?: boolean;
+  body_binary?: boolean;
+  location?: string;
+  extracted: TryExtract[];
+  assertions: TryAssertion[];
+  messages?: TryMessage[];
+  error?: string;
+}
+
+export interface TryFix {
+  /** base_url: set target.base_url; step_path: set steps[step].path (auth.login for -1). */
+  kind: 'base_url' | 'step_path';
+  step: number;
+  value: string;
+  label: string;
+}
+
+export interface TryHint {
+  level: 'error' | 'warning' | 'info';
+  step?: string;
+  message: string;
+  fix?: TryFix;
+}
+
+export interface TryResult {
+  ok: boolean;
+  duration_ms: number;
+  data: Record<string, string>;
+  data_note?: string;
+  steps: TryStep[];
+  hints: TryHint[];
 }
 
 export interface StartRunRequest {

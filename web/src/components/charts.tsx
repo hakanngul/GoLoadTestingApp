@@ -45,7 +45,7 @@ export type Palette = Record<Token, string>;
 function readPalette(): Palette {
   const cs = getComputedStyle(document.documentElement);
   const out = {} as Palette;
-  for (const t of TOKENS) out[t] = cs.getPropertyValue(t).trim() || '#888';
+  for (const t of TOKENS) out[t] = cs.getPropertyValue(t).trim() || 'currentColor';
   return out;
 }
 
@@ -57,10 +57,11 @@ export function runColors(p: Palette): string[] {
 export function usePalette(): Palette {
   const [p, setP] = useState<Palette>(readPalette);
   useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const on = () => setP(readPalette());
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
+    // The theme lives in <html data-theme> (src/lib/theme.ts); re-read the
+    // tokens whenever it changes (user toggle or OS change under "system").
+    const obs = new MutationObserver(() => setP(readPalette()));
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => obs.disconnect();
   }, []);
   return p;
 }

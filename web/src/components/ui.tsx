@@ -80,6 +80,19 @@ const paths: Record<string, ReactNode> = {
     </>
   ),
   external: <path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5M11.5 9.5v4h-9v-9h4" />,
+  sun: (
+    <>
+      <circle cx="8" cy="8" r="2.8" />
+      <path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1" />
+    </>
+  ),
+  moon: <path d="M13 9.5A5.5 5.5 0 016.5 3a5.5 5.5 0 106.5 6.5z" />,
+  monitor: (
+    <>
+      <rect x="2" y="2.5" width="12" height="8.5" rx="1" />
+      <path d="M5.5 14h5M8 11v3" />
+    </>
+  ),
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof paths | string; size?: number }) {
@@ -109,7 +122,7 @@ export function BrandMark({ size = 22 }: { size?: number }) {
         height={Math.round(size * 0.64)}
         viewBox="0 0 16 16"
         fill="none"
-        stroke="#fff"
+        stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
         strokeLinejoin="round"
