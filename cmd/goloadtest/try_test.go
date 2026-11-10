@@ -25,14 +25,15 @@ func TestTryCommand(t *testing.T) {
 		}
 	}
 
-	// A redirect fails with a hint and exit 1.
+	// A redirect that is not followed (follow_redirects: false; its
+	// target does not exist) fails with a hint and exit 1.
 	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://www.example.test/", http.StatusMovedPermanently)
 	}))
 	defer moved.Close()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "s.yaml")
-	y := fmt.Sprintf("name: m\ntarget: {base_url: %s}\nload: {stages: [{duration: 1s, target: 1}]}\nsteps:\n  - {name: home, path: /, assert: [{type: status, value: '200'}]}\n  - {name: next, path: /x}\n", moved.URL)
+	y := fmt.Sprintf("name: m\ntarget: {base_url: %s}\nload: {stages: [{duration: 1s, target: 1}]}\nsteps:\n  - {name: home, path: /, follow_redirects: false, assert: [{type: status, value: '200'}]}\n  - {name: next, path: /x}\n", moved.URL)
 	if err := os.WriteFile(p, []byte(y), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -25,6 +25,10 @@ import (
 // in flight at an arrival's dispatch time the arrival is dropped:
 // Options.OnDropped is called and the scheduler moves on without blocking.
 //
+// Sessions: every arrival is a new visitor, so no protocol.Session is
+// attached; the executor then starts each iteration with an empty cookie
+// jar (see protocol.Session).
+//
 // runOpen returns when the schedule is exhausted or ctx is done; it does not
 // wait for in-flight iterations (Run does).
 func (e *Engine) runOpen(ctx context.Context, r *runState, segs []segment, start time.Time) {
@@ -71,7 +75,7 @@ func (e *Engine) runOpen(ctx context.Context, r *runState, segs []segment, start
 		go func() {
 			defer r.wg.Done()
 			defer e.active.Add(-1)
-			r.iterate(intended)
+			r.iterate(r.iterCtx, intended)
 		}()
 	}
 }

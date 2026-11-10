@@ -202,13 +202,35 @@ type TryStep struct {
 	Body          string `json:"body,omitempty"`
 	BodyTruncated bool   `json:"body_truncated,omitempty"`
 	BodyBinary    bool   `json:"body_binary,omitempty"`
-	// Location is the resolved redirect target of a 3xx response.
-	Location   string         `json:"location,omitempty"`
-	Extracted  []TryExtract   `json:"extracted"`
-	Assertions []TryAssertion `json:"assertions"`
+	// Location is the resolved redirect target of a final 3xx response
+	// (one that was not followed).
+	Location string `json:"location,omitempty"`
+	// Redirects lists the redirects that were followed before the final
+	// response, in order. URL is then the first request and FinalURL the
+	// one that produced Status, the response headers and the body.
+	Redirects []TryRedirect `json:"redirects,omitempty"`
+	FinalURL  string        `json:"final_url,omitempty"`
+	// CookiesSent names the cookies sent with the (final) request,
+	// CookiesSet those its response stored in the virtual user's cookie
+	// jar. Names only; values are never reported.
+	CookiesSent []string       `json:"cookies_sent,omitempty"`
+	CookiesSet  []string       `json:"cookies_set,omitempty"`
+	Extracted   []TryExtract   `json:"extracted"`
+	Assertions  []TryAssertion `json:"assertions"`
 	// Messages are the per-message results of a ws step.
 	Messages []TryMessage `json:"messages,omitempty"`
 	Error    string       `json:"error,omitempty"`
+}
+
+// TryRedirect is one followed redirect of a trial step: the request that
+// was answered with a 3xx and where it led. Cookies are names only.
+type TryRedirect struct {
+	Status      int      `json:"status"`
+	Method      string   `json:"method"`
+	URL         string   `json:"url"`
+	Location    string   `json:"location"`
+	CookiesSent []string `json:"cookies_sent,omitempty"`
+	CookiesSet  []string `json:"cookies_set,omitempty"`
 }
 
 // TryHeader is one header (values of sensitive headers are masked).

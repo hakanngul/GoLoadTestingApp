@@ -125,6 +125,33 @@ One YAML file per test. `internal/scenario/types.go` is the single source of tru
 
 The UI editor produces the same YAML (Form and YAML tabs stay in sync).
 
+### Cookies and redirects
+
+GoLoad behaves like Locust (`requests.Session`), JMeter (Cookie Manager + Follow Redirects) and a browser: every virtual user keeps its cookies, and redirects are followed. Both are on by default and need no YAML.
+
+```yaml
+target:
+  base_url: https://www.example.com
+  cookies: false            # default true: keep cookies per virtual user
+  follow_redirects: false   # default true: follow 301/302/303/307/308
+  max_redirects: 5          # default 10
+steps:
+  - name: old link
+    path: /old
+    follow_redirects: false # per step; overrides the target setting
+    assert: [{type: status, value: "301"}]
+```
+
+- **Cookies.** `Set-Cookie` of every response (each redirect hop, the `auth.login` request and WebSocket handshakes included) is stored in the virtual user's cookie jar and sent back on later requests to that site, HTTP and WebSocket alike. A `Cookie` header you set yourself is merged with the jar; your cookie wins on a name clash.
+  - *Closed model:* one jar per virtual user for its whole life, across iterations, like a Locust user or a JMeter thread. A site that first answers `302` + `Set-Cookie` is redirected once per VU.
+  - *Open model:* every iteration is a new visitor and starts with an empty jar (it is redirected once per iteration). Cookies are still shared between the steps of that iteration.
+  - *`auth: {type: login}`:* the cookies the login sets are cached with the token and given to every virtual user that reuses the cached login (see Authentication).
+- **Redirects.** A step reports the **final** response: status, assertions, `extract` (including `from: header`) and bytes are those of the last response, and its latency (and `target.timeout`) covers the whole chain. `303`, and `301`/`302` after anything but GET/HEAD, continue as a GET without body; `307`/`308` repeat method and body. A chain that would repeat a request it already made fails at once with `redirect loop: /a → /b → /a`; longer chains stop after `max_redirects` hops.
+- **Where a redirect may lead.** A hop that stays on the same host is always followed. A hop to another host is followed only if the server's target allowlist has that host (`redirect to https://… not allowed (host not in allowlist)` otherwise); see [docs/security.md](docs/security.md) for distributed workers. `Authorization`, the header injected by `auth:`, your own `Cookie` header and a `Host` override are never sent to another host.
+- **User-Agent.** Requests are sent as `GoLoad/<version>` unless a target or step header sets `User-Agent`.
+
+> **Behaviour change.** Earlier versions never followed redirects and kept no cookies. A step that expects a redirect status (`assert: status 301/302`, or `extract` of the `Location` header) now sees the final response instead: add `follow_redirects: false` to that step. Scenarios that sent a `Cookie` header by hand keep working. To get the old behaviour everywhere, set `target.cookies: false` and `target.follow_redirects: false`.
+
 ### Authentication
 
 An `auth:` block authenticates iterations without making login a step of every iteration:
@@ -144,29 +171,32 @@ auth:
 - `per_user` caches one login per distinct rendered login request (usually one per CSV row); concurrent iterations for the same user wait for a single login. Logins are reported as step `auth:login`; cache hits report nothing.
 - The header is added to every HTTP step and WebSocket handshake unless the step sets it itself. `inject: false` only exposes the extracted variables.
 - A failed login fails the iteration and is retried next time; a `401` from any step drops the cached login.
+- Session cookies work like the token: the login runs as a new visitor, the cookies it sets are cached with the extracted variables, and every virtual user that uses that login gets them in its cookie jar before its first step. With `scope: shared` all virtual users share one server-side session; with `per_user` there is one per distinct login. A re-login (`refresh`, or after a `401`) replaces them.
 - `bearer` (`token: "{{api_key}}"`) and `basic` (`username`, `password`) need no login; `{{var}}`s come from CSV data.
 
 ### Test request (`goloadtest try`)
 
 Before starting a run, send ONE iteration and see exactly what the target answers:
 
-- **UI:** the **Test request** button next to Run / Save in both editors sends the current, possibly unsaved scenario. A drawer shows each step (status, time, rendered URL, headers with secrets masked, a body snippet, extracted variables, every assertion) and hints at the top. Hints that carry a fix (e.g. a new `base_url`) have an **Apply** button that edits the form.
+- **UI:** the **Test request** button next to Run / Save in both editors sends the current, possibly unsaved scenario. A drawer shows each step (status, time, rendered URL, every redirect that was followed, the names of the cookies sent and stored, headers with secrets masked, a body snippet, extracted variables, every assertion) and hints at the top. Hints that carry a fix (e.g. a new `base_url`) have an **Apply** button that edits the form.
 - **CLI:** `goloadtest try [-v] [-json] scenario.yaml` prints the same report; exit 0 when every step passed, 1 otherwise.
 - **API:** `POST /api/tests/try` `{yaml, test_id?}` (see `internal/api/doc.go`).
 
 It runs the login (if any) and each step once, in order, through the same executors as a run, and stops at the first failing step like a run does. `{{vars}}` come from the first CSV row (saved tests with an uploaded file; the CLI reads the file next to the scenario). The server's target allowlist applies. Limits: 30 s in total, the scenario timeout per step, the first 20 steps, think times and WebSocket hold skipped, body snippets up to 8 KiB of text, at most 4 test requests at once per server.
 
-Hints explain the usual reasons a run fails with 100% errors: a **redirect** (GoLoad never follows redirects; e.g. `https://example.com/` → `https://www.example.com:443/` suggests `base_url: https://www.example.com`), a **WAF / bot protection** block (Cloudflare, Akamai, …), **rate limiting** (429), `{{var}}`s that were **sent literally** because nothing defines them, extracts that did not match, failed assertions, and **TLS / DNS / connection** errors in plain words. `goloadtest validate` and the editor's Validation panel also warn about `{{var}}` references that no CSV column, earlier extract or auth variable defines.
+Hints explain the usual reasons a run fails with 100% errors, and what is worth changing: a **redirect to another host or scheme** that was followed (e.g. `https://example.com/` → `https://www.example.com:443/`: every request would make that extra hop, so the hint suggests `base_url: https://www.example.com`), a redirect that was **not allowed** or **loops** (with cookies disabled: enable cookies), a redirect to the same URL that resolved once the cookie came back (information only), a **WAF / bot protection** block (Cloudflare, Akamai, …), **rate limiting** (429), `{{var}}`s that were **sent literally** because nothing defines them, extracts that did not match, failed assertions, and **TLS / DNS / connection** errors in plain words. `goloadtest validate` and the editor's Validation panel also warn about `{{var}}` references that no CSV column, earlier extract or auth variable defines.
 
-In runs, a failing `3xx` now names its target, e.g. `assert status: got 301, want eq 200 (redirects to https://www.example.com:443/)`.
+In runs, a failing `3xx` of a step with `follow_redirects: false` names its target, e.g. `assert status: got 301, want eq 200 (redirects to https://www.example.com:443/)`.
 
 ## How it measures
 
 - **Open model (default).** The target is iterations per second. Arrival times come from the integral of the ramp, so there is no drift. When `max_vus` iterations are already in flight, a new arrival is dropped and counted, never queued.
 - **Closed model.** The target is the number of virtual users looping the steps.
 - **Coordinated omission.** Latency of an iteration's first step is measured from its *scheduled* start, not from when it was sent.
+- **Virtual users keep cookies.** Closed model: one cookie jar per virtual user for the whole run. Open model: each iteration is a new visitor with an empty jar. Turn off with `target.cookies: false`. See [Cookies and redirects](#cookies-and-redirects).
+- **Redirects are followed** (up to 10 hops). A step counts as one request: its status is the final one and its latency spans the whole chain, so a step that is redirected on every request measures two round trips. Use `follow_redirects: false` on a step (or the target) to measure the 3xx itself.
 - **Percentiles.** Each worker sends HDR histograms every second. The master merges them; percentiles are never averaged.
-- **Errors.** HTTP 400 and above counts as an error unless the step asserts on status explicitly.
+- **Errors.** HTTP 400 and above (of the final response) counts as an error unless the step asserts on status explicitly.
 - **Error groups.** Every failure is counted in a group keyed by step, status and a *normalized* message (at most 100 groups per run, then one "other errors" group). Request-specific parts are replaced so that one cause stays one group: UUIDs become `{uuid}`, long hex/base64 tokens `{id}`, numbers of 4+ digits `{n}` (`status 503` is kept), long durations `{dur}`, timestamps `{ts}`, URL path numbers `{n}`, query values `{v}` (keys kept), and the ephemeral local port in `127.0.0.1:54321->…` `{port}`. Each group keeps its first raw message as an example: the UI shows it under "Show example" and copies it.
 - **Self-check.** Generator CPU is reported. A run gets a warning if it reaches 80%, because latency may then come from the generator instead of the target.
 
@@ -191,7 +221,7 @@ How the number of workers is chosen:
 ## Security
 
 See [docs/security.md](docs/security.md). In short:
-- `serve` refuses to start without a target allowlist.
+- `serve` refuses to start without a target allowlist; redirects to hosts that are not on it are not followed.
 - `GOLOAD_TOKEN` protects the API and UI.
 - `GOLOAD_WORKER_TOKEN` protects the worker port.
 

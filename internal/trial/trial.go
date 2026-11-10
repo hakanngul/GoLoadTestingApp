@@ -125,6 +125,7 @@ func Run(ctx context.Context, sc *scenario.Scenario, opts Options) model.TryResu
 		HTTP: httpx.Options{
 			MaxConnsPerHost: 4,
 			CheckURL:        opts.Allow,
+			CheckRedirect:   opts.Allow,
 			Trace: func(t *httpx.Trace) {
 				mu.Lock()
 				pending = append(pending, t)
@@ -301,10 +302,18 @@ func fillDetails(e *entry, bodyLimit int) {
 			e.RequestBody += "…"
 		}
 	}
+	for _, h := range t.Hops {
+		e.Redirects = append(e.Redirects, model.TryRedirect{
+			Status: h.Status, Method: h.Method, URL: redactURL(h.URL), Location: redactURL(h.Location),
+			CookiesSent: h.CookiesSent, CookiesSet: h.CookiesSet,
+		})
+	}
+	e.FinalURL = redactURL(t.FinalURL)
 	if !t.Sent {
 		return
 	}
 	e.Location = t.Location
+	e.CookiesSent, e.CookiesSet = t.CookiesSent, t.CookiesSet
 	e.ResponseHeaders = responseHeaders(t.RespHeader)
 	if len(t.Body) > 0 {
 		if isBinary(t.RespHeader.Get("Content-Type"), t.Body) {

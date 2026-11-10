@@ -20,6 +20,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/executor"
+	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/httpx"
 	"github.com/hakanngul/GoLoadTestingApp/internal/provision"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
@@ -249,7 +250,9 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 	if err != nil {
 		return model.Run{}, err
 	}
-	exec, closeExec, err := executor.New(sc, executor.Options{})
+	// Redirect hops to another host are vetted by the allowlist, like the
+	// configured targets above (nil = no allowlist: follow everything).
+	exec, closeExec, err := executor.New(sc, executor.Options{HTTP: httpx.Options{CheckRedirect: m.allow}})
 	if err != nil {
 		return model.Run{}, &ValidationError{Details: []string{err.Error()}}
 	}

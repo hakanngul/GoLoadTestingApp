@@ -16,6 +16,7 @@ import (
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/allowlist"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
+	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/httpx"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 )
 
@@ -101,9 +102,15 @@ func stepHints(sc *scenario.Scenario, e *entry) []model.TryHint {
 
 	// Transport-level failures (no HTTP response).
 	if e.Status == 0 && e.err != nil {
-		return []model.TryHint{transportHint(e)}
+		if t != nil && len(t.Hops) > 0 {
+			out = followedHints(sc, e) // the failing request is a redirect hop
+		}
+		return append(out, transportHint(e))
 	}
 
+	if t != nil && len(t.Hops) > 0 {
+		out = append(out, followedHints(sc, e)...)
+	}
 	redirected := false
 	switch s := e.Status; {
 	case s >= 300 && s <= 399 && e.Location != "":
@@ -168,34 +175,126 @@ func stepHints(sc *scenario.Scenario, e *entry) []model.TryHint {
 	return out
 }
 
-// redirectHint explains a 3xx and, when possible, proposes a fix.
+// redirectHint explains a final 3xx (a redirect that was not followed)
+// and, when possible, proposes a fix.
 func redirectHint(sc *scenario.Scenario, e *entry, level string) model.TryHint {
 	h := model.TryHint{Level: level, Step: e.Name}
-	loc, err1 := url.Parse(e.Location)
-	req, err2 := url.Parse(e.trace.URL)
-	msg := fmt.Sprintf("The response is a %d redirect to %s. GoLoad does not follow redirects, so every request of a run would measure this %d instead of the real page.",
-		e.Status, e.Location, e.Status)
-	if err1 != nil || err2 != nil {
-		h.Message = msg
+	var blocked *httpx.RedirectError
+	switch {
+	case errors.As(e.err, &blocked):
+		h.Level = "error"
+		h.Message = fmt.Sprintf("The response is a %d redirect to %s, which GoLoad did not follow: %s.", e.Status, e.Location, blocked.Reason)
+		if errors.Is(e.err, allowlist.ErrNotAllowed) {
+			h.Message += fmt.Sprintf(" Host %q is not on this server's allowlist; ask the operator to add it to -allow-targets (GOLOAD_ALLOWED_TARGETS) if you own it or have permission to test it.", hostOf(e.Location))
+		}
+		return h
+	case strings.HasPrefix(e.Error, "redirect loop"):
+		h.Level = "error"
+		if !sc.Target.CookiesEnabled() {
+			h.Message = fmt.Sprintf("The server keeps answering with a %d redirect to a URL that was already requested (%s). It most likely waits for a cookie it set to come back, but cookies are disabled: enable cookies by removing `cookies: false` from target (GoLoad then keeps cookies per virtual user, like a browser).",
+				e.Status, e.Location)
+		} else {
+			h.Message = fmt.Sprintf("The server redirects in a loop (%d to %s, a request that was already made with the same cookies), so the page never loads. Check the URL and whether the site needs a login or a specific header before it stops redirecting.",
+				e.Status, e.Location)
+		}
+		return h
+	case strings.HasPrefix(e.Error, "too many redirects"):
+		h.Level = "error"
+		h.Message = fmt.Sprintf("The redirect chain did not end within target.max_redirects hops (last: %d to %s). Check the URL; raise target.max_redirects only if such a long chain is expected.", e.Status, e.Location)
 		return h
 	}
-	sameOrigin := strings.EqualFold(loc.Scheme, req.Scheme) && strings.EqualFold(hostPort(loc), hostPort(req))
-	samePath := loc.EscapedPath() == req.EscapedPath() && loc.RawQuery == req.RawQuery
+
+	// follow_redirects: false. A passing step asserts the 3xx on purpose.
+	if e.State == model.TryPassed {
+		h.Level = "info"
+	}
+	a := adviseRedirect(sc, e, e.trace.URL, e.Location)
+	h.Message = fmt.Sprintf("The response is a %d redirect to %s. follow_redirects is false for this step, so a run measures this %d instead of the page behind it.",
+		e.Status, e.Location, e.Status) + a.msg
+	h.Fix = a.fix
+	return h
+}
+
+// followedHints comments on the redirects a step followed before its
+// final response. Only the first hop is diagnosed: it is the one a
+// scenario change can avoid.
+func followedHints(sc *scenario.Scenario, e *entry) []model.TryHint {
+	hops := e.trace.Hops
+	first := hops[0]
+	a := adviseRedirect(sc, e, first.URL, first.Location)
+	h := model.TryHint{Level: "info", Step: e.Name}
+	total := ""
+	if len(hops) > 1 {
+		total = fmt.Sprintf(" (%d redirects in total)", len(hops))
+	}
+	switch {
+	case !a.parsed:
+		h.Message = fmt.Sprintf("The request was redirected (%d) to %s and GoLoad followed it%s; the step's latency covers the whole chain.", first.Status, first.Location, total)
+	case a.sameOrigin && a.samePath:
+		// The cookie check of the reported site: 302 to itself + cookie.
+		if len(first.CookiesSet) > 0 {
+			h.Message = fmt.Sprintf("The first request was answered with a %d redirect to the same URL and a cookie (%s); with the cookie sent back the server answered %d. In a run each virtual user passes this cookie check once (closed model) or on every iteration (open model: each iteration is a new visitor).",
+				first.Status, strings.Join(first.CookiesSet, ", "), e.Status)
+		} else {
+			h.Message = fmt.Sprintf("The first request was answered with a %d redirect to the same URL, which GoLoad followed%s.", first.Status, total)
+		}
+	case !a.sameOrigin:
+		// An extra hop on every request is rarely what one wants to measure.
+		h.Level = "warning"
+		h.Message = fmt.Sprintf("The request was redirected (%d) to %s and GoLoad followed it%s. Every request of a run would make this extra hop and measure both requests.",
+			first.Status, first.Location, total) + a.msg
+		h.Fix = a.fix
+	default: // same origin, another path
+		h.Message = fmt.Sprintf("The request was redirected (%d) to %s and GoLoad followed it%s; the step's latency covers the whole chain.", first.Status, first.Location, total)
+		switch {
+		case a.loginish:
+			h.Level = "warning"
+			h.Message += a.msg
+		case first.Method == http.MethodGet || first.Method == http.MethodHead:
+			h.Message += a.msg
+			h.Fix = a.fix
+		}
+	}
+	return []model.TryHint{h}
+}
+
+// redirAdvice is what adviseRedirect found out about one redirect.
+type redirAdvice struct {
+	parsed     bool // both URLs parsed; the other fields are valid
+	sameOrigin bool
+	samePath   bool
+	loginish   bool
+	msg        string // advice to append to a hint (starts with a space)
+	fix        *model.TryFix
+}
+
+// adviseRedirect compares a request URL with the redirect target it was
+// answered with and proposes how the scenario could avoid the redirect.
+func adviseRedirect(sc *scenario.Scenario, e *entry, from, location string) redirAdvice {
+	var a redirAdvice
+	loc, err1 := url.Parse(location)
+	req, err2 := url.Parse(from)
+	if err1 != nil || err2 != nil {
+		return a
+	}
+	a.parsed = true
+	a.sameOrigin = strings.EqualFold(loc.Scheme, req.Scheme) && strings.EqualFold(hostPort(loc), hostPort(req))
+	a.samePath = loc.EscapedPath() == req.EscapedPath() && loc.RawQuery == req.RawQuery
 	if (loc.EscapedPath() == "" || loc.EscapedPath() == "/") && (req.EscapedPath() == "" || req.EscapedPath() == "/") && loc.RawQuery == req.RawQuery {
-		samePath = true
+		a.samePath = true
 	}
 	path := stepPath(sc, e.Index)
 	absStep := isAbs(path)
 	lp := strings.ToLower(loc.Path)
-	loginish := strings.Contains(lp, "login") || strings.Contains(lp, "signin") || strings.Contains(lp, "sign-in") || strings.Contains(lp, "/auth")
+	a.loginish = strings.Contains(lp, "login") || strings.Contains(lp, "signin") || strings.Contains(lp, "sign-in") || strings.Contains(lp, "/auth")
 
 	switch {
-	case samePath && !sameOrigin:
+	case a.samePath && !a.sameOrigin:
 		newOrigin := loc.Scheme + "://" + hostPort(loc)
 		if absStep {
-			msg += " The URL moved to " + newOrigin + "; use the new URL."
+			a.msg = " The URL moved to " + newOrigin + "; use the new URL."
 			if !strings.Contains(path, "{{") {
-				h.Fix = &model.TryFix{Kind: "step_path", Step: e.Index, Value: e.Location, Label: "Use " + e.Location}
+				a.fix = &model.TryFix{Kind: "step_path", Step: e.Index, Value: location, Label: "Use " + location}
 			}
 			break
 		}
@@ -204,14 +303,14 @@ func redirectHint(sc *scenario.Scenario, e *entry, level string) model.TryHint {
 			break
 		}
 		newBase := newOrigin + strings.TrimRight(base.EscapedPath(), "/")
-		msg += " The site moved to another host or scheme: set target.base_url to " + newBase + "."
-		h.Fix = &model.TryFix{Kind: "base_url", Step: -1, Value: newBase, Label: "Set base_url to " + newBase}
-	case sameOrigin && !samePath:
-		if loginish {
-			msg += " It points to a login page: the request is probably missing authentication."
+		a.msg = " The site moved to another host or scheme: set target.base_url to " + newBase + "."
+		a.fix = &model.TryFix{Kind: "base_url", Step: -1, Value: newBase, Label: "Set base_url to " + newBase}
+	case a.sameOrigin && !a.samePath:
+		if a.loginish {
+			a.msg = " It points to a login page: the request is probably missing authentication."
 			break
 		}
-		msg += " Use the final path directly."
+		a.msg = " Use the final path directly."
 		if absStep || path == "" || strings.Contains(path, "{{") {
 			break
 		}
@@ -230,16 +329,15 @@ func redirectHint(sc *scenario.Scenario, e *entry, level string) model.TryHint {
 		if p == "" {
 			p = "/"
 		}
-		h.Fix = &model.TryFix{Kind: "step_path", Step: e.Index, Value: p, Label: "Use path " + p}
-	case !sameOrigin:
-		if loginish {
-			msg += " It points to a login page on another host: the request is probably missing authentication (SSO?)."
+		a.fix = &model.TryFix{Kind: "step_path", Step: e.Index, Value: p, Label: "Use path " + p}
+	case !a.sameOrigin:
+		if a.loginish {
+			a.msg = " It points to a login page on another host: the request is probably missing authentication (SSO?)."
 		} else {
-			msg += " It points to a different host and path: check that the URL is right."
+			a.msg = " It points to a different host and path: check that the URL is right."
 		}
 	}
-	h.Message = msg
-	return h
+	return a
 }
 
 // stepPath returns the path of steps[i] (auth.login for -1).
@@ -331,6 +429,9 @@ func transportHint(e *entry) model.TryHint {
 	h := model.TryHint{Level: "error", Step: e.Name}
 	err := e.err
 	host := hostOf(e.URL)
+	if e.FinalURL != "" {
+		host = hostOf(e.FinalURL) // the request that failed is a redirect hop
+	}
 	var (
 		dnsErr  *net.DNSError
 		uaErr   x509.UnknownAuthorityError

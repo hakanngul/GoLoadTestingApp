@@ -90,6 +90,12 @@ export interface FormStep {
   assert: FormAssert[];
   /** WebSocket settings; only used (and emitted) when type is 'ws'. */
   ws: FormWS;
+  /**
+   * Per-step override of target.follow_redirects (HTTP steps). undefined =
+   * use the target setting (nothing emitted). YAML-only: the form has no
+   * control for it but keeps the value.
+   */
+  follow_redirects?: boolean;
 }
 
 export function emptyWS(): FormWS {
@@ -164,9 +170,35 @@ export function emptyAuth(): FormAuth {
   };
 }
 
+/** target (types.go Target). */
+export interface FormTarget {
+  base_url: string;
+  headers: KV[];
+  timeout: string;
+  insecure_skip_verify: boolean;
+  /** Keep cookies per virtual user. Default true; only `false` is emitted. */
+  cookies: boolean;
+  /** Follow 3xx redirects. Default true; only `false` is emitted. */
+  follow_redirects: boolean;
+  /** '' = default (10). YAML-only, kept on round trip. */
+  max_redirects: string;
+}
+
+export function defaultTarget(base_url = ''): FormTarget {
+  return {
+    base_url,
+    headers: [],
+    timeout: '',
+    insecure_skip_verify: false,
+    cookies: true,
+    follow_redirects: true,
+    max_redirects: '',
+  };
+}
+
 export interface ScenarioForm {
   name: string;
-  target: { base_url: string; headers: KV[]; timeout: string; insecure_skip_verify: boolean };
+  target: FormTarget;
   load: { model: LoadModel; stages: FormStage[]; max_vus: string };
   data: { enabled: boolean; file: string; mode: DataMode };
   auth: FormAuth;
@@ -192,7 +224,7 @@ export function emptyStep(i = 1): FormStep {
 export function defaultForm(): ScenarioForm {
   return {
     name: 'new-test',
-    target: { base_url: 'https://api.example.test', headers: [], timeout: '10s', insecure_skip_verify: false },
+    target: { ...defaultTarget('https://api.example.test'), timeout: '10s' },
     load: {
       model: 'open',
       stages: [
@@ -284,6 +316,9 @@ export function yamlToForm(text: string): ParseOutcome {
       headers: kvFromMap(target.headers),
       timeout: str(target.timeout),
       insecure_skip_verify: target.insecure_skip_verify === true,
+      cookies: target.cookies !== false,
+      follow_redirects: target.follow_redirects !== false,
+      max_redirects: str(target.max_redirects),
     },
     load: {
       model: load.model === 'closed' ? 'closed' : 'open',
@@ -313,6 +348,7 @@ function parseStep(s: unknown, fallbackName: string): FormStep {
   const type: StepType = str(o.type).trim().toLowerCase() === 'ws' ? 'ws' : 'http';
   const ws = isObj(o.ws) ? o.ws : {};
   return {
+    ...(typeof o.follow_redirects === 'boolean' ? { follow_redirects: o.follow_redirects } : {}),
     name: str(o.name) || fallbackName,
     type,
     ws: {
@@ -387,6 +423,10 @@ export function formToObject(f: ScenarioForm): Obj {
   const th = kvToMap(f.target.headers);
   if (th) target.headers = th;
   if (f.target.insecure_skip_verify) target.insecure_skip_verify = true;
+  // Defaults (on) are omitted, so existing scenarios stay unchanged.
+  if (!f.target.cookies) target.cookies = false;
+  if (!f.target.follow_redirects) target.follow_redirects = false;
+  if (f.target.max_redirects.trim()) target.max_redirects = num(f.target.max_redirects);
   out.target = target;
 
   const load: Obj = {
@@ -429,6 +469,7 @@ function httpStepToObject(s: FormStep, omitEmptyName = false): Obj {
       return x;
     });
   if (s.think_time.trim()) o.think_time = s.think_time.trim();
+  if (s.follow_redirects !== undefined) o.follow_redirects = s.follow_redirects;
   return o;
 }
 

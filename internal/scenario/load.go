@@ -172,6 +172,9 @@ func (s *Scenario) Validate() error {
 	if s.Target.Timeout.Duration < 0 {
 		add("target.timeout", "must not be negative")
 	}
+	if n := s.Target.MaxRedirects; n < 0 || n > MaxRedirectsLimit {
+		add("target.max_redirects", "must be between 1 and %d (default %d), got %d", MaxRedirectsLimit, DefaultMaxRedirects, n)
+	}
 	for k := range s.Target.Headers {
 		if strings.TrimSpace(k) == "" {
 			add("target.headers", "header name must not be empty")
@@ -375,6 +378,9 @@ func validateWSStep(p string, st *Step) []error {
 	}
 	if len(st.Assert) > 0 {
 		add(p+".assert", "not allowed on ws steps; use ws.messages[].expect")
+	}
+	if st.FollowRedirects != nil {
+		add(p+".follow_redirects", "not allowed on ws steps")
 	}
 	lp := strings.ToLower(st.Path)
 	if !strings.HasPrefix(st.Path, "/") && !strings.HasPrefix(st.Path, "{{") &&

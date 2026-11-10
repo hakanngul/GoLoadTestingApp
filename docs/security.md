@@ -17,6 +17,14 @@ Matching ignores ports and schemes.
 
 The master checks the scenario's `base_url` and every absolute step URL (for example `ws://` URLs) before a run starts. A run that fails the check gets HTTP 403 and no run record is created.
 
+**Redirects.** Steps follow redirects by default, so every hop is checked as well, while the run is going:
+
+- A hop to the **same host** as the request being redirected is always followed (scheme and port may change, e.g. `http` → `https`; the allowlist ignores both anyway). It is not a new target.
+- A hop to **another host** is followed only if that host is on the allowlist. Otherwise nothing is sent to it and the step fails with `redirect to https://other.example/ not allowed (host not in allowlist)`. This applies to runs executed by the master, to Test request, and to redirect chains (each hop is checked against the host it comes from).
+- **Workers** do not receive the master's allowlist. A worker therefore follows a redirect to another host only if that host is one of the scenario's own targets (`base_url` or an absolute step URL), which the master checked before the run started; anything else fails with `redirect to … not allowed (host is not a target of this scenario; …)`. To let workers follow redirects to further hosts, start them with their own list: `goloadtest worker -allow-targets '…'` or `GOLOAD_ALLOWED_TARGETS` (same syntax; hops are then checked against it).
+- `goloadtest run` and `goloadtest try` have no allowlist and follow every http(s) redirect, like curl `-L`.
+- Credentials stay with the host they were written for: `Authorization`, `Proxy-Authorization`, the header injected by `auth:`, an explicit `Cookie` header and a `Host` override are dropped when a redirect leaves the host of the step's first request (or downgrades it from https to http). Cookies from the jar follow the usual cookie rules (domain, path, `Secure`).
+
 **Known limitation.** A step path made entirely of a template (`path: "{{url}}"`) is resolved per iteration from CSV data or extracted values, so the master cannot vet it up front. Plain HTTP paths must start with `/`, which keeps the request on the base host. If you allow scenario authors you do not trust, also restrict worker egress at the network level: `worker_egress_cidrs` in `deploy/aws`, or a security group or firewall.
 
 Before any test against a shared or production system:

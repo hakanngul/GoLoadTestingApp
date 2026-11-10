@@ -192,6 +192,17 @@ export interface TryMessage {
   error?: string;
 }
 
+/** One followed redirect of a trial step (cookie names only, never values). */
+export interface TryRedirect {
+  status: number;
+  method: string;
+  url: string;
+  /** Resolved target: the URL of the next request. */
+  location: string;
+  cookies_sent?: string[];
+  cookies_set?: string[];
+}
+
 export interface TryStep {
   name: string;
   kind: 'http' | 'ws' | 'login';
@@ -209,7 +220,15 @@ export interface TryStep {
   body?: string;
   body_truncated?: boolean;
   body_binary?: boolean;
+  /** Resolved target of a final 3xx (a redirect that was not followed). */
   location?: string;
+  /** Redirects followed before the final response; url is the first request. */
+  redirects?: TryRedirect[];
+  /** URL that produced the final response, when redirects were followed. */
+  final_url?: string;
+  /** Names of the cookies sent with the (final) request / stored from its response. */
+  cookies_sent?: string[];
+  cookies_set?: string[];
   extracted: TryExtract[];
   assertions: TryAssertion[];
   messages?: TryMessage[];

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { TryFix, TryHeader, TryHint, TryResult, TryStep } from '../api/types';
 import { fmtBytes } from '../lib/format';
-import { fmtMs, headerValue, prettyBody, sortHints, stepBadge, summary } from '../lib/trial';
+import { fmtMs, headerValue, prettyBody, redirectLines, sortHints, stepBadge, summary } from '../lib/trial';
 import { ErrorAlert, Icon } from './ui';
 
 /**
@@ -203,6 +203,9 @@ function StepDetails({ step }: { step: TryStep }) {
     return <div className="try-details hint">Not run: an earlier step failed or the trial stopped.</div>;
   }
   const ct = headerValue(step.response_headers, 'content-type');
+  const hops = redirectLines(step);
+  const cookiesSent = step.cookies_sent ?? [];
+  const cookiesSet = step.cookies_set ?? [];
   return (
     <div className="try-details">
       {step.error && <div className="alert bad mono try-error">{step.error}</div>}
@@ -254,10 +257,42 @@ function StepDetails({ step }: { step: TryStep }) {
         </Block>
       )}
 
+      {hops.length > 0 && (
+        <Block
+          title={
+            <>
+              Redirects followed <span className="muted num">· {hops.length}</span>
+            </>
+          }
+        >
+          <ul className="try-checks">
+            {hops.map((h, i) => (
+              <li key={i}>
+                <span className="badge plain warn">{h.status}</span>
+                <span className="mono">{h.text}</span>
+                {h.cookies.length > 0 && <span className="muted"> — sets cookie {h.cookies.join(', ')}</span>}
+              </li>
+            ))}
+          </ul>
+          {step.final_url && (
+            <div className="hint">
+              The response below is from <span className="mono">{step.final_url}</span>; the step's time covers the whole
+              chain.
+            </div>
+          )}
+        </Block>
+      )}
+
       <Block title="Request">
         {step.url && (
           <div className="mono try-url">
             <strong>{step.kind === 'ws' ? 'WS' : step.method}</strong> {step.url}
+          </div>
+        )}
+        {cookiesSent.length > 0 && (
+          <div className="hint">
+            Cookies sent{hops.length > 0 ? ' with the final request' : ''} (names only):{' '}
+            <span className="mono">{cookiesSent.join(', ')}</span>
           </div>
         )}
         <Headers h={step.request_headers} />
@@ -272,6 +307,11 @@ function StepDetails({ step }: { step: TryStep }) {
             </>
           }
         >
+          {cookiesSet.length > 0 && (
+            <div className="hint">
+              Cookies stored for this virtual user (names only): <span className="mono">{cookiesSet.join(', ')}</span>
+            </div>
+          )}
           <Headers h={step.response_headers} />
           {step.body_binary ? (
             <div className="hint">Binary body ({fmtBytes(step.bytes)}) — not shown.</div>

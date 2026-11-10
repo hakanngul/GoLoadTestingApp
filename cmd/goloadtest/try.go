@@ -110,8 +110,21 @@ func printTry(w io.Writer, name string, res model.TryResult, verbose bool) {
 		if s.Error != "" {
 			lines = append(lines, "error: "+s.Error)
 		}
+		for _, h := range s.Redirects {
+			l := fmt.Sprintf("redirect %d %s %s -> %s", h.Status, h.Method, h.URL, h.Location)
+			if len(h.CookiesSet) > 0 {
+				l += " (sets cookie " + strings.Join(h.CookiesSet, ", ") + ")"
+			}
+			lines = append(lines, l)
+		}
 		if s.Location != "" {
 			lines = append(lines, "location: "+s.Location)
+		}
+		if len(s.CookiesSent) > 0 {
+			lines = append(lines, "cookies sent: "+strings.Join(s.CookiesSent, ", "))
+		}
+		if len(s.CookiesSet) > 0 {
+			lines = append(lines, "cookies set: "+strings.Join(s.CookiesSet, ", "))
 		}
 		for _, a := range s.Assertions {
 			l := "assert " + mark(a.Passed) + " " + a.Assertion

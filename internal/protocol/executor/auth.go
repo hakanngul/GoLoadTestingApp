@@ -22,6 +22,21 @@ package executor
 //     i.e. one entry per distinct credentials. Concurrent iterations that
 //     miss the same key wait for a single login (singleflight).
 //
+// Cookies (target.cookies, default on): the login request runs with a
+// fresh, recording protocol.Session, i.e. as a new visitor, and the
+// cookies it stores (of the final response and of every redirect hop)
+// are kept in the cache entry next to the extracted variables. Every
+// iteration that uses the entry, the one that logged in and those that
+// hit the cache alike, gets these cookies replayed into its virtual
+// user's session before its first step, so a session cookie set by the
+// login is sent on every step and WebSocket handshake. A session is
+// seeded once per entry: a closed-model VU keeps (and may update) the
+// cookies until a re-login (refresh, or a 401) produces a new entry;
+// open-model iterations start from the login's cookies every time. With
+// scope shared, all virtual users therefore share ONE server-side
+// session, with per_user one per distinct credentials, exactly like the
+// token.
+//
 // Reporting and coordinated omission: the iteration that performs a login
 // reports it as step "auth:login", measured from `intended` (it is the
 // first thing the iteration does); its first real step is then measured
@@ -67,6 +82,7 @@ type authExec struct {
 	login    *httpx.Executor
 	shared   bool
 	refresh  time.Duration
+	cookies  bool     // target.cookies: logins seed the VU sessions
 	keyParts []string // templates whose rendering identifies the user
 	keyConst bool     // no key part is templated: one entry for everybody
 
@@ -75,9 +91,13 @@ type authExec struct {
 	inflight map[string]*authCall
 }
 
-// authEntry is a successful login; vars is never modified after creation.
+// authEntry is a successful login; vars and cookies are never modified
+// after creation.
 type authEntry struct {
-	vars     map[string]string
+	vars map[string]string
+	// cookies are the cookies the login stored, replayed into the session
+	// of every virtual user that uses this entry.
+	cookies  []protocol.CookieSet
 	obtained time.Time
 }
 
@@ -100,7 +120,9 @@ func newAuth(sc *scenario.Scenario, opts Options) (protocol.Executor, func(), er
 		header = scenario.DefaultAuthHeader
 	}
 
-	ae := &authExec{}
+	ae := &authExec{cookies: sc.Target.CookiesEnabled()}
+	// The auth header must never follow a redirect to another host.
+	opts.HTTP.SensitiveHeaders = append(slices.Clone(opts.HTTP.SensitiveHeaders), header)
 	stepValue := "" // value injected into step headers
 	if a.InjectEnabled() {
 		switch a.Type {
@@ -240,6 +262,10 @@ func (ae *authExec) Iterate(ctx context.Context, vars map[string]string, intende
 		return
 	}
 
+	var sess *protocol.Session
+	if ae.cookies {
+		ctx, sess = protocol.EnsureSession(ctx) // open model: a new visitor
+	}
 	start := time.Now()
 	if !intended.IsZero() && intended.Before(start) {
 		start = intended
@@ -256,6 +282,9 @@ func (ae *authExec) Iterate(ctx context.Context, vars map[string]string, intende
 	}
 	for k, v := range ent.vars {
 		vars[k] = v
+	}
+	if len(ent.cookies) > 0 {
+		sess.Seed(ent, ent.cookies)
 	}
 	ae.setHeaderVar(vars)
 	ae.inner.Iterate(ctx, vars, intended, func(r protocol.Result) {
@@ -314,7 +343,13 @@ func (ae *authExec) acquire(ctx context.Context, key string, vars map[string]str
 		ae.inflight[key] = c
 		ae.mu.Unlock()
 
-		res, extracted := ae.login.Step(ctx, 0, vars, start)
+		// Log in as a new visitor and record the cookies the login sets.
+		lctx, rec := ctx, (*protocol.Session)(nil)
+		if ae.cookies {
+			rec = protocol.NewRecordingSession()
+			lctx = protocol.WithSession(ctx, rec)
+		}
+		res, extracted := ae.login.Step(lctx, 0, vars, start)
 		res.Step = scenario.AuthLoginStep
 		cancelled := ctx.Err() != nil
 
@@ -324,7 +359,7 @@ func (ae *authExec) acquire(ctx context.Context, key string, vars map[string]str
 		case cancelled:
 			c.cancelled = true
 		case res.Err == nil:
-			e := &authEntry{vars: make(map[string]string, len(extracted)/2), obtained: time.Now()}
+			e := &authEntry{vars: make(map[string]string, len(extracted)/2), cookies: rec.Recorded(), obtained: time.Now()}
 			for j := 0; j+1 < len(extracted); j += 2 {
 				e.vars[extracted[j]] = extracted[j+1]
 			}
