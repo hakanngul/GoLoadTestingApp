@@ -36,10 +36,22 @@ type Options struct {
 // A scenario made only of HTTP steps gets exactly the *httpx.Executor that
 // httpx.New returns, so its behaviour is unchanged; one made only of ws
 // steps gets a *wsx.Executor; a mix gets a composite executor.
+//
+// If sc.Auth is set, that executor is wrapped by the auth layer (see
+// auth.go), which logs in / caches credentials and injects the auth
+// header into every HTTP step and WebSocket handshake.
 func New(sc *scenario.Scenario, opts Options) (protocol.Executor, func(), error) {
 	if sc == nil {
 		return nil, nil, errors.New("executor: nil scenario")
 	}
+	if sc.Auth != nil {
+		return newAuth(sc, opts)
+	}
+	return newPlain(sc, opts)
+}
+
+// newPlain builds the protocol executor for sc, ignoring sc.Auth.
+func newPlain(sc *scenario.Scenario, opts Options) (protocol.Executor, func(), error) {
 	var nHTTP, nWS int
 	for i := range sc.Steps {
 		if sc.Steps[i].IsWS() {

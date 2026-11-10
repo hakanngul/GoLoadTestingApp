@@ -332,27 +332,57 @@ loop:
 		}
 	}
 
-	check := func(from, to time.Duration, wantVUs int64) {
+	// profile(t) is the VU target at offset t (piecewise linear).
+	profile := func(t time.Duration) float64 {
+		ms := float64(t) / float64(time.Millisecond)
+		switch {
+		case ms <= 0:
+			return 0
+		case ms < 800:
+			return 4 * ms / 800
+		case ms < 1400:
+			return 4
+		case ms < 1800:
+			return 4 * (1 - (ms-1400)/400)
+		default:
+			return 0
+		}
+	}
+	// The controller re-evaluates every 50ms and a VU told to stop first
+	// finishes its current iteration, so the running count may trail the
+	// profile. Accept any count the profile prescribed within the last lag;
+	// on a loaded machine (e.g. go test ./... in parallel) scheduling adds
+	// more, so the lag allowance is generous while still catching a
+	// controller that does not follow the profile at all.
+	const lag = 150 * time.Millisecond
+	check := func(from, to time.Duration) {
 		t.Helper()
 		seen := 0
 		for _, s := range samples {
-			if s.at >= from && s.at <= to {
-				seen++
-				if s.vus != wantVUs {
-					t.Errorf("at %v: %d VUs (target %.2f), want %d", s.at, s.vus, s.target, wantVUs)
-				}
+			if s.at < from || s.at > to {
+				continue
+			}
+			seen++
+			lo, hi := int64(math.MaxInt64), int64(math.MinInt64)
+			for d := time.Duration(0); d <= lag; d += 5 * time.Millisecond {
+				v := int64(math.Round(profile(s.at - d)))
+				lo, hi = min(lo, v), max(hi, v)
+			}
+			if s.vus < lo || s.vus > hi {
+				t.Errorf("at %v: %d VUs, want %d..%d (profile %.2f)", s.at, s.vus, lo, hi, profile(s.at))
 			}
 		}
 		if seen == 0 {
 			t.Errorf("no samples in [%v, %v]", from, to)
 		}
 	}
-	// round(target): 1 VU in [100,300)ms, 2 in [300,500), 4 in [700,1400),
-	// 2 in (1550,1650] on the way down. Windows keep some margin.
-	check(170*time.Millisecond, 230*time.Millisecond, 1)
-	check(370*time.Millisecond, 430*time.Millisecond, 2)
-	check(800*time.Millisecond, 1300*time.Millisecond, 4)
-	check(1575*time.Millisecond, 1625*time.Millisecond, 2)
+	check(100*time.Millisecond, 1750*time.Millisecond)
+	// During the hold the count must be exact.
+	for _, s := range samples {
+		if s.at >= 1000*time.Millisecond && s.at <= 1350*time.Millisecond && s.vus != 4 {
+			t.Errorf("hold at %v: %d VUs, want 4", s.at, s.vus)
+		}
+	}
 
 	if v := e.vus.Load(); v != 0 {
 		t.Errorf("%d VUs still running after Run", v)

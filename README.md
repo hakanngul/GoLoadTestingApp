@@ -46,8 +46,30 @@ One YAML file per test. `internal/scenario/types.go` is the single source of tru
 | `login_flow.yaml` | Closed model, CSV users, token extract, think time |
 | `spike.yaml` | Ramp and a sudden spike |
 | `websocket_chat.yaml` | WebSocket: connect, join, hold, ping |
+| `auth_login.yaml` | Scenario-level auth: cached per-user login, injected header |
 
 The UI editor produces the same YAML (Form and YAML tabs stay in sync).
+
+### Authentication
+
+An `auth:` block authenticates iterations without making login a step of every iteration:
+
+```yaml
+auth:
+  type: login              # login | bearer | basic
+  scope: per_user          # default; or shared (one login per load generator)
+  refresh: 15m             # re-login after this age (0 = never)
+  login:                   # an HTTP step; method defaults to POST here
+    path: /login
+    body: '{"username":"{{username}}","password":"{{password}}"}'
+    extract: [{var: token, from: json, expr: data.access_token}]
+# header: Authorization    value: Bearer {{token}}   (defaults)
+```
+
+- `per_user` caches one login per distinct rendered login request (usually one per CSV row); concurrent iterations for the same user wait for a single login. Logins are reported as step `auth:login`; cache hits report nothing.
+- The header is added to every HTTP step and WebSocket handshake unless the step sets it itself. `inject: false` only exposes the extracted variables.
+- A failed login fails the iteration and is retried next time; a `401` from any step drops the cached login.
+- `bearer` (`token: "{{api_key}}"`) and `basic` (`username`, `password`) need no login; `{{var}}`s come from CSV data.
 
 ## How it measures
 

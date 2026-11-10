@@ -78,6 +78,9 @@ func (s *Scenario) ApplyDefaults() {
 	if s.Data != nil && s.Data.Mode == "" {
 		s.Data.Mode = DataSequential
 	}
+	if s.Auth != nil {
+		s.Auth.applyDefaults()
+	}
 	for i := range s.Steps {
 		st := &s.Steps[i]
 		// Type stays empty (= http) when omitted so that existing
@@ -230,6 +233,11 @@ func (s *Scenario) Validate() error {
 		} else {
 			seen[name] = i
 		}
+	}
+
+	// auth
+	if s.Auth != nil {
+		errs = append(errs, s.validateAuth()...)
 	}
 
 	// thresholds
