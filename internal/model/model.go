@@ -265,3 +265,39 @@ type APIError struct {
 	Error   string   `json:"error"`
 	Details []string `json:"details,omitempty"`
 }
+
+// ---- Live statistics (Locust-style live tables) ----
+
+// LiveStats is sent on the run stream as `event: stats` once per second
+// (and once right after subscribing) while a run is active. It is not
+// stored per second; only the final error groups are persisted.
+type LiveStats struct {
+	Elapsed float64 `json:"elapsed"` // seconds since run start
+	// Total is cumulative since the start of the run (by_step filled):
+	// the live per-endpoint table. Percentiles come from merged HDR
+	// histograms.
+	Total Summary `json:"total"`
+	// Current is the last one-second interval (by_step filled).
+	Current Summary `json:"current"`
+	// Errors groups every failed request so far (not just the sampled
+	// ones), most frequent first, at most MaxErrorGroups entries; further
+	// distinct errors are counted in a final group with Message
+	// ErrorGroupOther.
+	Errors []ErrorGroup `json:"errors"`
+}
+
+// ErrorGroup counts failed requests with the same step, status and message.
+type ErrorGroup struct {
+	Step    string    `json:"step"`
+	Status  int       `json:"status"` // 0 = transport error / timeout
+	Message string    `json:"message"`
+	Count   int64     `json:"count"`
+	First   time.Time `json:"first"`
+	Last    time.Time `json:"last"`
+}
+
+// MaxErrorGroups caps the distinct error groups tracked per run.
+const MaxErrorGroups = 100
+
+// ErrorGroupOther is the Message of the overflow group.
+const ErrorGroupOther = "(other errors)"

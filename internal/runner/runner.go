@@ -26,6 +26,7 @@ const (
 	EventMetric EventType = "metric" // Metric set
 	EventStatus EventType = "status" // Run set (status/summary changed)
 	EventDone   EventType = "done"   // Run set; channel closes after this
+	EventStats  EventType = "stats"  // Stats set (model.LiveStats), once per second
 )
 
 // Event is one live update for a run (sent as SSE `event: <Type>`,
@@ -34,6 +35,7 @@ type Event struct {
 	Type   EventType
 	Metric *model.MetricPoint
 	Run    *model.Run
+	Stats  *model.LiveStats
 }
 
 // Runner is implemented by *Manager (manager.go).

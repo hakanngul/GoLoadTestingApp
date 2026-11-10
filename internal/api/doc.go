@@ -20,7 +20,9 @@
 //	POST   /api/runs/{id}/stop               -> 202
 //	GET    /api/runs/{id}/metrics            -> []model.MetricPoint
 //	GET    /api/runs/{id}/errors             -> []model.ErrorSample
-//	GET    /api/runs/{id}/stream             SSE: `event: metric|status|done`, `data: <json>`.
+//	GET    /api/runs/{id}/error-groups       -> []model.ErrorGroup (final counts; live counts while running)
+//	GET    /api/runs/{id}/stream             SSE: `event: metric|status|done|stats`, `data: <json>`.
+//	                                         stats = model.LiveStats (cumulative per-step table + error groups), 1/s.
 //	                                         For a finished run: one `done` event then close.
 //	                                         Heartbeat comment `: ping` every 15s.
 //
