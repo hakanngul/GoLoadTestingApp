@@ -18,6 +18,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/allowlist"
 	"github.com/hakanngul/GoLoadTestingApp/internal/api"
 	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
 	"github.com/hakanngul/GoLoadTestingApp/internal/provision"
@@ -35,6 +36,8 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	db := flags.String("db", envOr("GOLOAD_DB", "memory"), `Postgres DSN, or "memory" for a throwaway in-memory store`)
 	token := flags.String("token", os.Getenv("GOLOAD_TOKEN"), "require this bearer token on /api (empty = no auth)")
 	devCORS := flags.Bool("dev-cors", false, "allow the Vite dev server (localhost:5173) to call the API")
+	allowTargets := flags.String("allow-targets", os.Getenv("GOLOAD_ALLOWED_TARGETS"),
+		`target hosts runs may hit: "api.example.com,*.staging.example.com,10.0.0.0/8"; "*" allows all (development only)`)
 	grpcAddr := flags.String("grpc-addr", envOr("GOLOAD_GRPC_ADDR", ":9090"), `gRPC listen address for workers ("" disables distributed mode)`)
 	workerToken := flags.String("worker-token", os.Getenv("GOLOAD_WORKER_TOKEN"), "token workers must present (required when -grpc-addr is set)")
 	if err := flags.Parse(args); err != nil {
@@ -57,7 +60,22 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		log.Info("marked interrupted runs", "count", n)
 	}
 
-	ropts := runner.Options{Store: st, Version: version, Logger: log}
+	allow, err := allowlist.Parse(*allowTargets)
+	if err != nil {
+		fmt.Fprintf(stderr, "serve: %v\n", err)
+		return exitUsage
+	}
+	switch {
+	case allow.Empty():
+		fmt.Fprintln(stderr, "serve: -allow-targets (or GOLOAD_ALLOWED_TARGETS) is required: list the hosts you own or have written permission to test; use \"*\" only for local development")
+		return exitUsage
+	case allow.AllowsAll():
+		log.Warn("target allowlist is \"*\": runs may send load to any host")
+	default:
+		log.Info("target allowlist", "entries", allow.String())
+	}
+
+	ropts := runner.Options{Store: st, Version: version, Logger: log, Allow: allow.Check}
 	if *grpcAddr != "" {
 		if *workerToken == "" {
 			fmt.Fprintln(stderr, "serve: -worker-token (or GOLOAD_WORKER_TOKEN) is required with -grpc-addr; use -grpc-addr \"\" for single-node mode")

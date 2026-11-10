@@ -16,3 +16,4 @@ tags = {
   project = "goload"
   owner   = "perf-team"
 }
+allowed_targets = "api.example.com,*.staging.example.com"

@@ -47,6 +47,16 @@ variable "admin_cidrs" {
   }
 }
 
+variable "allowed_targets" {
+  description = "Comma-separated target hosts the master lets runs hit (GOLOAD_ALLOWED_TARGETS), e.g. \"api.example.com,*.staging.example.com\". Only systems you own or have written permission to test."
+  type        = string
+
+  validation {
+    condition     = trimspace(var.allowed_targets) != "" && trimspace(var.allowed_targets) != "*"
+    error_message = "Set an explicit allowlist; \"*\" is for local development only."
+  }
+}
+
 variable "worker_egress_cidrs" {
   description = "Where workers may send traffic. 0.0.0.0/0 is needed unless the image registry, OS repos and AWS endpoints are reachable another way. Narrowing it to the allowlisted targets adds a network-level guardrail on top of the application allowlist."
   type        = list(string)

@@ -34,6 +34,7 @@ umask 077
   echo "POSTGRES_PASSWORD=$(param '${db_password_param}')"
   echo "GOLOAD_TOKEN=$(param '${api_token_param}')"
   echo "GOLOAD_WORKER_TOKEN=$(param '${worker_token_param}')"
+  echo "GOLOAD_ALLOWED_TARGETS=${allowed_targets}"
   echo "GOLOAD_IMAGE=${image}"
   echo "GOLOAD_PROVISIONER=aws"
   echo "GOLOAD_MASTER_ADVERTISE_ADDR=$PRIVATE_IP:${grpc_port}"

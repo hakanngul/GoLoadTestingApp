@@ -493,6 +493,7 @@ resource "aws_instance" "master" {
     compose_arch          = var.architecture == "arm64" ? "aarch64" : "x86_64"
     api_token_param       = local.ssm_params.api_token
     worker_token_param    = local.ssm_params.worker_token
+    allowed_targets       = var.allowed_targets
     db_password_param     = local.ssm_params.db_password
     launch_template_id    = aws_launch_template.worker.id
     worker_subnet_ids     = join(",", var.worker_subnet_ids)

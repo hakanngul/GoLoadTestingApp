@@ -43,8 +43,11 @@ services:
       GOLOAD_TOKEN: ${GOLOAD_TOKEN:?set GOLOAD_TOKEN in .env}
       # Shared secret workers present on the gRPC port.
       GOLOAD_WORKER_TOKEN: ${GOLOAD_WORKER_TOKEN:?set GOLOAD_WORKER_TOKEN in .env}
-      # --- AWS worker provisioning (see docs/aws.md). Unused until the
-      # master wires internal/provision; harmless when empty.
+      # Hosts runs may send load to (required): only systems you own or
+      # have written permission to test. e.g. api.example.com,*.staging.example.com
+      GOLOAD_ALLOWED_TARGETS: ${GOLOAD_ALLOWED_TARGETS:?set GOLOAD_ALLOWED_TARGETS in .env}
+      # --- AWS worker provisioning (see docs/aws.md). none = use only
+      # workers that connect on their own.
       GOLOAD_PROVISIONER: ${GOLOAD_PROVISIONER:-none}
       GOLOAD_MASTER_ADVERTISE_ADDR: ${GOLOAD_MASTER_ADVERTISE_ADDR:-}
       GOLOAD_WORKER_IMAGE: ${GOLOAD_WORKER_IMAGE:-}
