@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview --port 4173",
     "mock": "node mock/server.mjs",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "test": "node --test test/*.test.mjs",
+    "screenshots:modes": "node scripts/screenshots-modes.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

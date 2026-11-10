@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { FileInfo } from '../api/types';
 import {
   ASSERT_OPS,
@@ -9,12 +9,16 @@ import {
   THRESHOLD_METRICS,
   THRESHOLD_OPS,
   OP_SYMBOL,
+  authHeaderPreview,
+  defaultLoginStep,
   emptyStep,
   parseDuration,
   unitFor,
   type AssertType,
   type DataMode,
+  type AuthType,
   type ExtractSource,
+  type FormAuth,
   type FormStep,
   type LoadModel,
   type ScenarioForm,
@@ -24,9 +28,19 @@ import { Icon } from './ui';
 
 type Mutator = (fn: (f: ScenarioForm) => void) => void;
 
-function Section({ title, extra, children }: { title: string; extra?: ReactNode; children: ReactNode }) {
+function Section({
+  id,
+  title,
+  extra,
+  children,
+}: {
+  id?: string;
+  title: ReactNode;
+  extra?: ReactNode;
+  children: ReactNode;
+}) {
   return (
-    <div className="card">
+    <div className="card form-section" id={id}>
       <div className="card-head">
         <h2>{title}</h2>
         <span className="spacer" />
@@ -55,9 +69,25 @@ export function ScenarioFormView({
   const fileOptions = files.map((f) => f.name);
   if (form.data.file && !fileOptions.includes(form.data.file)) fileOptions.unshift(form.data.file);
 
+  const authSummary =
+    form.auth.type === 'none'
+      ? 'none'
+      : form.auth.type === 'login'
+        ? `login · ${form.auth.scope || 'per_user'}`
+        : form.auth.type;
+  const toc: { id: string; label: string; meta?: string }[] = [
+    { id: 'sec-target', label: 'Target' },
+    { id: 'sec-auth', label: 'Auth', meta: authSummary },
+    { id: 'sec-load', label: 'Load', meta: `${form.load.model} · ${form.load.stages.length}` },
+    { id: 'sec-data', label: 'Data', meta: form.data.enabled ? form.data.file || '—' : 'off' },
+    { id: 'sec-steps', label: 'Steps', meta: String(form.steps.length) },
+    { id: 'sec-thresholds', label: 'Thresholds', meta: String(form.thresholds.length) },
+  ];
+
   return (
     <div className="stack" style={{ gap: 12 }}>
-      <Section title="General & target">
+      <SectionNav items={toc} />
+      <Section id="sec-target" title="General & target">
         <div className="form-grid">
           <div className="field span-4">
             <label>Name</label>
@@ -98,7 +128,10 @@ export function ScenarioFormView({
         </div>
       </Section>
 
+      <AuthSection auth={form.auth} mutate={mutate} dataEnabled={form.data.enabled} />
+
       <Section
+        id="sec-load"
         title="Load profile"
         extra={
           <div className="segmented" role="radiogroup" aria-label="Load model">
@@ -206,6 +239,7 @@ export function ScenarioFormView({
       </Section>
 
       <Section
+        id="sec-data"
         title="Test data"
         extra={
           <label className="checkbox">
@@ -267,6 +301,7 @@ export function ScenarioFormView({
       </Section>
 
       <Section
+        id="sec-steps"
         title={`Steps (${form.steps.length})`}
         extra={
           <button className="btn sm" onClick={() => mutate((f) => void f.steps.push(emptyStep(f.steps.length + 1)))}>
@@ -281,6 +316,7 @@ export function ScenarioFormView({
       </Section>
 
       <Section
+        id="sec-thresholds"
         title="Thresholds"
         extra={
           <button
@@ -368,27 +404,81 @@ export function ScenarioFormView({
 }
 
 function StepCard({ index, step, count, mutate }: { index: number; step: FormStep; count: number; mutate: Mutator }) {
-  const m: (fn: (s: FormStep) => void) => void = (fn) => mutate((f) => fn(f.steps[index]));
-  const isWS = step.type === 'ws';
-  const showBody = !isWS && (!['GET', 'HEAD'].includes(step.method) || step.body !== '');
-  const pathOk = /^(\/|\{\{)/.test(step.path) || (isWS && /^wss?:\/\//i.test(step.path));
-  const extractSources = isWS ? EXTRACT_SOURCES.filter((x) => x !== 'header') : EXTRACT_SOURCES;
+  const m: StepMutator = (fn) => mutate((f) => fn(f.steps[index]));
   const move = (d: number) =>
     mutate((f) => {
       const j = index + d;
       if (j < 0 || j >= f.steps.length) return;
       [f.steps[index], f.steps[j]] = [f.steps[j], f.steps[index]];
     });
+  return (
+    <StepEditor
+      step={step}
+      m={m}
+      label={`#${index + 1}`}
+      controls={
+        <>
+          <button className="btn ghost icon sm" onClick={() => move(-1)} disabled={index === 0} title="Move up" aria-label="Move up">
+            <Icon name="up" size={14} />
+          </button>
+          <button
+            className="btn ghost icon sm"
+            onClick={() => move(1)}
+            disabled={index === count - 1}
+            title="Move down"
+            aria-label="Move down"
+          >
+            <Icon name="down" size={14} />
+          </button>
+          <button
+            className="btn ghost icon sm danger"
+            onClick={() => mutate((f) => void f.steps.splice(index, 1))}
+            title="Remove step"
+            aria-label="Remove step"
+          >
+            <Icon name="trash" size={14} />
+          </button>
+        </>
+      }
+    />
+  );
+}
+
+type StepMutator = (fn: (s: FormStep) => void) => void;
+
+/**
+ * Editor for one step (also used for the auth login request). httpOnly
+ * hides the WebSocket option; nameOptional allows an empty name.
+ */
+export function StepEditor({
+  step,
+  m,
+  label,
+  controls,
+  httpOnly,
+  nameOptional,
+}: {
+  step: FormStep;
+  m: StepMutator;
+  label: string;
+  controls?: ReactNode;
+  httpOnly?: boolean;
+  nameOptional?: boolean;
+}) {
+  const isWS = step.type === 'ws';
+  const showBody = !isWS && (!['GET', 'HEAD'].includes(step.method) || step.body !== '');
+  const pathOk = /^(\/|\{\{)/.test(step.path) || /^(https?|wss?):\/\//i.test(step.path);
+  const extractSources = isWS ? EXTRACT_SOURCES.filter((x) => x !== 'header') : EXTRACT_SOURCES;
 
   return (
     <div className="step-card">
       <div className="step-head">
-        <span className="step-index">#{index + 1}</span>
+        <span className="step-index">{label}</span>
         <input
           className="input"
           style={{ maxWidth: 260, fontWeight: 600 }}
           value={step.name}
-          placeholder="step name"
+          placeholder={nameOptional ? 'name (optional)' : 'step name'}
           onChange={(e) => m((s) => void (s.name = e.target.value))}
         />
         <span className={`method ${isWS ? 'WS' : step.method}`}>{isWS ? 'WS' : step.method}</span>
@@ -396,26 +486,7 @@ function StepCard({ index, step, count, mutate }: { index: number; step: FormSte
           {step.path}
         </span>
         <span className="grow" />
-        <button className="btn ghost icon sm" onClick={() => move(-1)} disabled={index === 0} title="Move up" aria-label="Move up">
-          <Icon name="up" size={14} />
-        </button>
-        <button
-          className="btn ghost icon sm"
-          onClick={() => move(1)}
-          disabled={index === count - 1}
-          title="Move down"
-          aria-label="Move down"
-        >
-          <Icon name="down" size={14} />
-        </button>
-        <button
-          className="btn ghost icon sm danger"
-          onClick={() => mutate((f) => void f.steps.splice(index, 1))}
-          title="Remove step"
-          aria-label="Remove step"
-        >
-          <Icon name="trash" size={14} />
-        </button>
+        {controls}
       </div>
       <div className="step-body">
         <div className="form-grid">
@@ -439,7 +510,7 @@ function StepCard({ index, step, count, mutate }: { index: number; step: FormSte
               {METHODS.map((x) => (
                 <option key={x}>{x}</option>
               ))}
-              <option value="WS">WS (WebSocket)</option>
+              {!httpOnly && <option value="WS">WS (WebSocket)</option>}
             </select>
           </div>
           <div className="field span-8">
@@ -594,7 +665,7 @@ function StepCard({ index, step, count, mutate }: { index: number; step: FormSte
 }
 
 /** Settings of a WebSocket step: hold, pings and the message exchange. */
-function WSBlock({ step, m }: { step: FormStep; m: (fn: (s: FormStep) => void) => void }) {
+function WSBlock({ step, m }: { step: FormStep; m: StepMutator }) {
   const ws = step.ws;
   return (
     <div className="sub-block">
@@ -665,5 +736,211 @@ function WSBlock({ step, m }: { step: FormStep; m: (fn: (s: FormStep) => void) =
         </div>
       ))}
     </div>
+  );
+}
+
+/** Sticky in-page navigation for the long advanced form. */
+function SectionNav({ items }: { items: { id: string; label: string; meta?: string }[] }) {
+  const [active, setActive] = useState(items[0]?.id ?? '');
+  useEffect(() => {
+    const on = () => {
+      let cur = items[0]?.id ?? '';
+      for (const it of items) {
+        const el = document.getElementById(it.id);
+        if (el && el.getBoundingClientRect().top < 140) cur = it.id;
+      }
+      setActive(cur);
+    };
+    on();
+    window.addEventListener('scroll', on, { passive: true });
+    return () => window.removeEventListener('scroll', on);
+    // ids are static; only labels change with the form
+  }, []);
+  return (
+    <nav className="section-nav" aria-label="Form sections">
+      {items.map((it) => (
+        <button
+          key={it.id}
+          className={active === it.id ? 'on' : ''}
+          onClick={() => {
+            const el = document.getElementById(it.id);
+            if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 56, behavior: 'smooth' });
+          }}
+        >
+          {it.label}
+          {it.meta !== undefined && <span className="sn-meta">{it.meta}</span>}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+const AUTH_LABEL: Record<AuthType, string> = {
+  none: 'None',
+  login: 'Login request',
+  bearer: 'Bearer token',
+  basic: 'Basic',
+};
+
+/** The `auth:` block: how iterations authenticate (types.go Auth). */
+function AuthSection({ auth, mutate, dataEnabled }: { auth: FormAuth; mutate: Mutator; dataEnabled: boolean }) {
+  const ma = (fn: (a: FormAuth) => void) => mutate((f) => fn(f.auth));
+  const preview = authHeaderPreview(auth);
+  const loginVars = auth.type === 'login' ? [...auth.login.body.matchAll(/\{\{\s*([\w.-]+)\s*\}\}/g)].map((x) => x[1]) : [];
+  return (
+    <Section
+      id="sec-auth"
+      title="Authentication"
+      extra={
+        <div className="segmented" role="radiogroup" aria-label="Authentication type">
+          {(Object.keys(AUTH_LABEL) as AuthType[]).map((t) => (
+            <button
+              key={t}
+              className={auth.type === t ? 'on' : ''}
+              role="radio"
+              aria-checked={auth.type === t}
+              onClick={() =>
+                ma((a) => {
+                  a.type = t;
+                  if (t === 'login' && !a.login.path) a.login = defaultLoginStep();
+                })
+              }
+            >
+              {AUTH_LABEL[t]}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      {auth.type === 'none' ? (
+        <div className="hint">
+          No authentication. Choose <strong>Login request</strong> to log in once per user (or once in total) and reuse
+          the token, instead of making login a step of every iteration.
+        </div>
+      ) : (
+        <div className="stack" style={{ gap: 12 }}>
+          {auth.type === 'login' && (
+            <>
+              <div className="form-grid">
+                <div className="field span-6">
+                  <label>Scope</label>
+                  <select
+                    className="input"
+                    value={auth.scope || 'per_user'}
+                    onChange={(e) => ma((a) => void (a.scope = e.target.value as FormAuth['scope']))}
+                  >
+                    <option value="per_user">per_user — each distinct credential logs in once</option>
+                    <option value="shared">shared — one login shared by every iteration</option>
+                  </select>
+                </div>
+                <div className="field span-3">
+                  <label>Refresh after</label>
+                  <input
+                    className={`input mono ${durOk(auth.refresh) ? '' : 'invalid'}`}
+                    placeholder="never"
+                    value={auth.refresh}
+                    title="Log in again when the cached login is older than this (empty = never)"
+                    onChange={(e) => ma((a) => void (a.refresh = e.target.value))}
+                  />
+                </div>
+                <div className="hint span-3" style={{ alignSelf: 'end', paddingBottom: 6 }}>
+                  A 401 from any step drops the cached login.
+                </div>
+              </div>
+              <StepEditor
+                step={auth.login}
+                m={(fn) => ma((a) => fn(a.login))}
+                label="login"
+                httpOnly
+                nameOptional
+              />
+              {auth.login.extract.length === 0 && (
+                <div className="alert warn">The login request needs at least one extract (e.g. token from json).</div>
+              )}
+              {loginVars.length > 0 && !dataEnabled && (
+                <div className="alert warn">
+                  The login body uses <code>{`{{${loginVars[0]}}}`}</code> but no CSV data file is enabled (Test data
+                  below).
+                </div>
+              )}
+            </>
+          )}
+          {auth.type === 'bearer' && (
+            <div className="field">
+              <label>Token</label>
+              <input
+                className="input mono"
+                placeholder="eyJhbGciOi…  or  {{api_key}}"
+                value={auth.token}
+                onChange={(e) => ma((a) => void (a.token = e.target.value))}
+              />
+            </div>
+          )}
+          {auth.type === 'basic' && (
+            <div className="form-grid">
+              <div className="field span-6">
+                <label>Username</label>
+                <input
+                  className="input mono"
+                  placeholder="{{user}}"
+                  value={auth.username}
+                  onChange={(e) => ma((a) => void (a.username = e.target.value))}
+                />
+              </div>
+              <div className="field span-6">
+                <label>Password</label>
+                <input
+                  className="input mono"
+                  placeholder="{{pass}}"
+                  value={auth.password}
+                  onChange={(e) => ma((a) => void (a.password = e.target.value))}
+                />
+              </div>
+            </div>
+          )}
+          <div className="form-grid">
+            <div className="field span-4">
+              <label>Header</label>
+              <input
+                className="input mono"
+                placeholder="Authorization"
+                value={auth.header}
+                onChange={(e) => ma((a) => void (a.header = e.target.value))}
+              />
+            </div>
+            {auth.type !== 'basic' && (
+              <div className="field span-5">
+                <label>Value template</label>
+                <input
+                  className="input mono"
+                  placeholder={auth.type === 'login' ? 'Bearer {{token}}' : 'Bearer <token>'}
+                  value={auth.value}
+                  onChange={(e) => ma((a) => void (a.value = e.target.value))}
+                />
+              </div>
+            )}
+            <div className="span-3" style={{ alignSelf: 'end', paddingBottom: 7 }}>
+              <label className="checkbox" title="Add the header to every HTTP step and WebSocket handshake">
+                <input type="checkbox" checked={auth.inject} onChange={(e) => ma((a) => void (a.inject = e.target.checked))} />
+                Add to every request
+              </label>
+            </div>
+          </div>
+          {preview && (
+            <div className="auth-preview">
+              <span className="label" style={{ margin: 0 }}>
+                {auth.inject ? 'Sent with every step' : 'Not injected'}
+              </span>
+              <code>
+                {preview.header}: {preview.value}
+              </code>
+              {!auth.inject && auth.type === 'login' && (
+                <span className="hint">Use the extracted variables in your own headers, e.g. {'{{token}}'}.</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </Section>
   );
 }

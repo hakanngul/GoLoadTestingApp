@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Test } from '../api/types';
+import { NewTestDialog } from '../components/NewTestDialog';
 import { ConfirmDialog, ErrorAlert, Icon, Loading, StatusBadge } from '../components/ui';
 import { fmtMs, fmtPct, fmtSeconds, timeAgo } from '../lib/format';
 import { useAsync, useNow } from '../lib/hooks';
@@ -14,6 +15,7 @@ export function TestsPage() {
   const nav = useNavigate();
   const tests = useAsync(() => api.listTests(), [], 10000);
   const [runFor, setRunFor] = useState<Test | null>(null);
+  const [choosing, setChoosing] = useState(false);
   const [deleting, setDeleting] = useState<Test | null>(null);
   const [delBusy, setDelBusy] = useState(false);
   const [delErr, setDelErr] = useState<unknown>(null);
@@ -44,9 +46,9 @@ export function TestsPage() {
           <div className="page-sub">Saved scenarios and their latest results</div>
         </div>
         <span className="spacer" />
-        <Link to="/tests/new" className="btn primary">
+        <button className="btn primary" onClick={() => setChoosing(true)}>
           <Icon name="plus" size={14} /> New test
-        </Link>
+        </button>
       </div>
 
       {tests.error && !tests.data ? <ErrorAlert error={tests.error} title="Failed to load tests" /> : null}
@@ -57,7 +59,10 @@ export function TestsPage() {
         ) : list.length === 0 ? (
           <div className="empty">
             <strong>No tests yet</strong>
-            Create a scenario to start load testing. <Link to="/tests/new">New test</Link>
+            Create a scenario to start load testing.{' '}
+            <button className="linklike" onClick={() => setChoosing(true)}>
+              New test
+            </button>
           </div>
         ) : (
           <div className="table-wrap">
@@ -141,6 +146,7 @@ export function TestsPage() {
         )}
       </div>
 
+      {choosing && <NewTestDialog onClose={() => setChoosing(false)} />}
       {runFor && (
         <Suspense fallback={null}>
           <RunStartDialog test={runFor} onClose={() => setRunFor(null)} />

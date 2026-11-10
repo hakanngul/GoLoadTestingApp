@@ -102,11 +102,74 @@ export interface FormThreshold {
   value: string;
 }
 
+export type AuthType = 'none' | 'login' | 'bearer' | 'basic';
+export type AuthScope = 'per_user' | 'shared';
+export const AUTH_TYPES: AuthType[] = ['none', 'login', 'bearer', 'basic'];
+
+/**
+ * The auth block (types.go Auth). type 'none' means no `auth:` key. Fields
+ * that do not apply to the selected type are kept in the form (so switching
+ * type back and forth does not lose input) but are not emitted.
+ */
+export interface FormAuth {
+  type: AuthType;
+  /** login only; '' = default (per_user), emitted only when set. */
+  scope: '' | AuthScope;
+  /** login only; Go duration, '' = never. */
+  refresh: string;
+  /** login only: an HTTP step (name optional). */
+  login: FormStep;
+  /** bearer only. */
+  token: string;
+  /** basic only. */
+  username: string;
+  password: string;
+  /** '' = Authorization. */
+  header: string;
+  /** '' = default ("Bearer {{token}}" for login). Must be empty for basic. */
+  value: string;
+  /** false emits `inject: false`. */
+  inject: boolean;
+}
+
+export const LOGIN_BODY_TEMPLATE = '{"username":"{{username}}","password":"{{password}}"}';
+
+export function defaultLoginStep(): FormStep {
+  return {
+    name: '',
+    type: 'http',
+    method: 'POST',
+    path: '/login',
+    headers: [{ key: 'Content-Type', value: 'application/json' }],
+    body: LOGIN_BODY_TEMPLATE,
+    think_time: '',
+    extract: [{ var: 'token', from: 'json', expr: 'token' }],
+    assert: [],
+    ws: emptyWS(),
+  };
+}
+
+export function emptyAuth(): FormAuth {
+  return {
+    type: 'none',
+    scope: '',
+    refresh: '',
+    login: defaultLoginStep(),
+    token: '',
+    username: '',
+    password: '',
+    header: '',
+    value: '',
+    inject: true,
+  };
+}
+
 export interface ScenarioForm {
   name: string;
   target: { base_url: string; headers: KV[]; timeout: string; insecure_skip_verify: boolean };
   load: { model: LoadModel; stages: FormStage[]; max_vus: string };
   data: { enabled: boolean; file: string; mode: DataMode };
+  auth: FormAuth;
   steps: FormStep[];
   thresholds: FormThreshold[];
 }
@@ -140,6 +203,7 @@ export function defaultForm(): ScenarioForm {
       max_vus: '',
     },
     data: { enabled: false, file: '', mode: 'sequential' },
+    auth: emptyAuth(),
     steps: [emptyStep(1)],
     thresholds: [
       { metric: 'latency.p95', op: 'lt', value: '500' },
@@ -234,50 +298,76 @@ export function yamlToForm(text: string): ParseOutcome {
       file: data ? str(data.file) : '',
       mode: data && (DATA_MODES as string[]).includes(str(data.mode)) ? (str(data.mode) as DataMode) : 'sequential',
     },
-    steps: arr(doc.steps).map((s, i) => {
-      const o = isObj(s) ? s : {};
-      const type: StepType = str(o.type).trim().toLowerCase() === 'ws' ? 'ws' : 'http';
-      const ws = isObj(o.ws) ? o.ws : {};
-      return {
-        name: str(o.name) || `step ${i + 1}`,
-        type,
-        ws: {
-          hold: str(ws.hold),
-          ping_every: str(ws.ping_every),
-          ping_message: str(ws.ping_message),
-          messages: arr(ws.messages).map((m) => {
-            const x = isObj(m) ? m : {};
-            return { send: str(x.send), expect: str(x.expect), timeout: str(x.timeout) };
-          }),
-        },
-        method: type === 'ws' ? '' : (str(o.method) || 'GET').toUpperCase(),
-        path: str(o.path),
-        headers: kvFromMap(o.headers),
-        body: str(o.body),
-        think_time: str(o.think_time),
-        extract: arr(o.extract).map((e) => {
-          const x = isObj(e) ? e : {};
-          const from = str(x.from) as ExtractSource;
-          return { var: str(x.var), from: EXTRACT_SOURCES.includes(from) ? from : 'json', expr: str(x.expr) };
-        }),
-        assert: arr(o.assert).map((a) => {
-          const x = isObj(a) ? a : {};
-          const type = str(x.type) as AssertType;
-          return {
-            type: ASSERT_TYPES.includes(type) ? type : 'status',
-            expr: str(x.expr),
-            op: str(x.op) || 'eq',
-            value: str(x.value),
-          };
-        }),
-      };
-    }),
+    auth: parseAuth(doc.auth),
+    steps: arr(doc.steps).map((s, i) => parseStep(s, `step ${i + 1}`)),
     thresholds: arr(doc.thresholds).map((t) => {
       const o = isObj(t) ? t : {};
       return { metric: str(o.metric), op: str(o.op) || 'lt', value: str(o.value) };
     }),
   };
   return { form, error: null };
+}
+
+function parseStep(s: unknown, fallbackName: string): FormStep {
+  const o = isObj(s) ? s : {};
+  const type: StepType = str(o.type).trim().toLowerCase() === 'ws' ? 'ws' : 'http';
+  const ws = isObj(o.ws) ? o.ws : {};
+  return {
+    name: str(o.name) || fallbackName,
+    type,
+    ws: {
+      hold: str(ws.hold),
+      ping_every: str(ws.ping_every),
+      ping_message: str(ws.ping_message),
+      messages: arr(ws.messages).map((m) => {
+        const x = isObj(m) ? m : {};
+        return { send: str(x.send), expect: str(x.expect), timeout: str(x.timeout) };
+      }),
+    },
+    method: type === 'ws' ? '' : (str(o.method) || 'GET').toUpperCase(),
+    path: str(o.path),
+    headers: kvFromMap(o.headers),
+    body: str(o.body),
+    think_time: str(o.think_time),
+    extract: arr(o.extract).map((e) => {
+      const x = isObj(e) ? e : {};
+      const from = str(x.from) as ExtractSource;
+      return { var: str(x.var), from: EXTRACT_SOURCES.includes(from) ? from : 'json', expr: str(x.expr) };
+    }),
+    assert: arr(o.assert).map((a) => {
+      const x = isObj(a) ? a : {};
+      const type = str(x.type) as AssertType;
+      return {
+        type: ASSERT_TYPES.includes(type) ? type : 'status',
+        expr: str(x.expr),
+        op: str(x.op) || 'eq',
+        value: str(x.value),
+      };
+    }),
+  };
+}
+
+function parseAuth(v: unknown): FormAuth {
+  const a = emptyAuth();
+  if (!isObj(v)) return a;
+  const t = str(v.type).trim().toLowerCase();
+  a.type = t === 'login' || t === 'bearer' || t === 'basic' ? t : 'none';
+  const scope = str(v.scope).trim();
+  a.scope = scope === 'per_user' || scope === 'shared' ? scope : '';
+  a.refresh = str(v.refresh);
+  if (isObj(v.login)) {
+    a.login = parseStep(v.login, '');
+    a.login.type = 'http';
+  } else if (a.type === 'login') {
+    a.login = { ...emptyStep(1), name: '', method: 'POST', path: '', assert: [] };
+  }
+  a.token = str(v.token);
+  a.username = str(v.username);
+  a.password = str(v.password);
+  a.header = str(v.header);
+  a.value = str(v.value);
+  a.inject = v.inject !== false;
+  return a;
 }
 
 // ---------- form -> YAML ----------
@@ -310,29 +400,66 @@ export function formToObject(f: ScenarioForm): Obj {
     out.data = { file: f.data.file, mode: f.data.mode };
   }
 
-  out.steps = f.steps.map((s) => {
-    if (s.type === 'ws') return wsStepToObject(s);
-    const o: Obj = { name: s.name, method: s.method, path: s.path };
-    const h = kvToMap(s.headers);
-    if (h) o.headers = h;
-    if (s.body.trim()) o.body = s.body.endsWith('\n') || !s.body.includes('\n') ? s.body : `${s.body}\n`;
-    if (s.extract.length) o.extract = s.extract.map((e) => ({ var: e.var, from: e.from, expr: e.expr }));
-    if (s.assert.length)
-      o.assert = s.assert.map((a) => {
-        const x: Obj = { type: a.type };
-        if (a.type === 'json' || a.expr.trim()) x.expr = a.expr;
-        if (a.op && a.op !== 'eq') x.op = a.op;
-        x.value = a.value;
-        return x;
-      });
-    if (s.think_time.trim()) o.think_time = s.think_time.trim();
-    return o;
-  });
+  const auth = authToObject(f.auth);
+  if (auth) out.auth = auth;
+
+  out.steps = f.steps.map((s) => (s.type === 'ws' ? wsStepToObject(s) : httpStepToObject(s)));
 
   if (f.thresholds.length) {
     out.thresholds = f.thresholds.map((t) => ({ metric: t.metric, op: t.op, value: num(t.value) }));
   }
   return out;
+}
+
+function httpStepToObject(s: FormStep, omitEmptyName = false): Obj {
+  const o: Obj = {};
+  if (!omitEmptyName || s.name.trim()) o.name = s.name;
+  o.method = s.method;
+  o.path = s.path;
+  const h = kvToMap(s.headers);
+  if (h) o.headers = h;
+  if (s.body.trim()) o.body = s.body.endsWith('\n') || !s.body.includes('\n') ? s.body : `${s.body}\n`;
+  if (s.extract.length) o.extract = s.extract.map((e) => ({ var: e.var, from: e.from, expr: e.expr }));
+  if (s.assert.length)
+    o.assert = s.assert.map((a) => {
+      const x: Obj = { type: a.type };
+      if (a.type === 'json' || a.expr.trim()) x.expr = a.expr;
+      if (a.op && a.op !== 'eq') x.op = a.op;
+      x.value = a.value;
+      return x;
+    });
+  if (s.think_time.trim()) o.think_time = s.think_time.trim();
+  return o;
+}
+
+/** The auth block in types.go field order; undefined for type none. */
+function authToObject(a: FormAuth): Obj | undefined {
+  if (a.type === 'none') return undefined;
+  const o: Obj = { type: a.type };
+  if (a.type === 'login') {
+    if (a.scope) o.scope = a.scope;
+    if (a.refresh.trim()) o.refresh = a.refresh.trim();
+    o.login = httpStepToObject(a.login, true);
+  }
+  if (a.type === 'bearer') o.token = a.token;
+  if (a.type === 'basic') {
+    o.username = a.username;
+    o.password = a.password;
+  }
+  if (a.header.trim()) o.header = a.header.trim();
+  if (a.type !== 'basic' && a.value.trim()) o.value = a.value;
+  if (!a.inject) o.inject = false;
+  return o;
+}
+
+/** The header the auth block injects, for previews ("Authorization: Bearer {{token}}"). */
+export function authHeaderPreview(a: FormAuth): { header: string; value: string } | null {
+  if (a.type === 'none') return null;
+  const header = a.header.trim() || 'Authorization';
+  let value = a.value.trim();
+  if (a.type === 'basic') value = 'Basic base64(username:password)';
+  else if (!value) value = a.type === 'login' ? 'Bearer {{token}}' : `Bearer ${a.token || '<token>'}`;
+  return { header, value };
 }
 
 /** A ws step: no method, body or assert; a ws block instead. */

@@ -170,12 +170,62 @@ addTest('t_4b7f02d3', readExample('login_flow.yaml') || soakYaml.replace('catalo
 addTest('t_e81a6c57', readExample('spike.yaml') || soakYaml.replace('catalog-soak', 'spike'), 150);
 addTest('t_27d5b9f8', soakYaml, 96);
 
+// A Quick-mode test (one request, ramp/hold/ramp-down) that logs in once per user.
+const ordersYaml = `name: orders-api
+target:
+  base_url: https://shop.example.test
+  headers:
+    Accept: application/json
+load:
+  model: closed
+  stages:
+    - duration: 30s
+      target: 25
+    - duration: 2m
+      target: 25
+    - duration: 15s
+      target: 0
+data:
+  file: users.csv
+  mode: sequential
+auth:
+  type: login
+  scope: per_user
+  refresh: 10m
+  login:
+    method: POST
+    path: /api/login
+    headers:
+      Content-Type: application/json
+    body: '{"username":"{{username}}","password":"{{password}}"}'
+    extract:
+      - var: token
+        from: json
+        expr: data.access_token
+steps:
+  - name: GET /v1/orders
+    method: GET
+    path: /v1/orders?limit=20
+    assert:
+      - type: status
+        value: "200"
+thresholds:
+  - metric: latency.p95
+    op: lt
+    value: 400
+  - metric: error_rate
+    op: lt
+    value: 0.01
+`;
+addTest('t_5a0c3e19', ordersYaml, 48, [{ name: 'users.csv', size: usersCsv.length || 1024 }]);
+
 // Performance model per test: base latencies + capacity (rps beyond which latency/errors climb).
 const perf = {
   t_9c1e44a0: { p50: 38, p95: 92, p99: 160, capacity: 400, err: 0.0005, stepFactor: [0.6, 1.4] },
   t_4b7f02d3: { p50: 140, p95: 380, p99: 690, capacity: 60, err: 0.003, stepFactor: [1.5, 0.5] },
   t_e81a6c57: { p50: 55, p95: 130, p99: 240, capacity: 580, err: 0.001, stepFactor: [1.2, 0.8] },
   t_27d5b9f8: { p50: 48, p95: 118, p99: 205, capacity: 520, err: 0.0015, stepFactor: [1.25, 0.75] },
+  t_5a0c3e19: { p50: 64, p95: 170, p99: 310, capacity: 300, err: 0.002, stepFactor: [1] },
 };
 function perfFor(testId) {
   return perf[testId] || { p50: 50, p95: 120, p99: 220, capacity: 500, err: 0.002, stepFactor: [1] };
@@ -381,6 +431,7 @@ const errRun = {
 runs.set(errRun.id, errRun);
 metrics.set(errRun.id, []);
 errorsByRun.set(errRun.id, []);
+finishedRun('t_5a0c3e19', 12);
 finishedRun('t_9c1e44a0', 2);
 
 // ---------------------------------------------------------------- live runs
@@ -485,6 +536,46 @@ function workers() {
 }
 
 // ---------------------------------------------------------------- validate
+// Structural checks of the auth block (see the Auth doc in internal/scenario/types.go).
+function validateAuth(yaml) {
+  const clean = yaml
+    .split('\n')
+    .map((l) => l.replace(/\s+#.*$/, '').replace(/^#.*$/, ''))
+    .join('\n');
+  const m = /^auth:(.*(?:\n(?:[ \t]+.*|\s*))*)/m.exec(clean);
+  if (!m) return [];
+  const block = m[1];
+  const errs = [];
+  const field = (k) => {
+    const x = new RegExp(`(?:^|[\\s{,])${k}:\\s*("[^"]*"|'[^']*'|[^,}\\n]*)`, 'm').exec(block);
+    return x ? x[1].trim().replace(/^["']|["']$/g, '') : undefined;
+  };
+  const type = field('type');
+  if (!type) return ['auth.type: must be one of login, bearer, basic'];
+  if (!['login', 'bearer', 'basic'].includes(type)) return [`auth.type: must be one of login, bearer, basic; got "${type}"`];
+  const scope = field('scope');
+  if (scope && !['per_user', 'shared'].includes(scope)) errs.push(`auth.scope: must be per_user or shared; got "${scope}"`);
+  const refresh = field('refresh');
+  if (refresh && !Number.isFinite(parseDuration(refresh))) errs.push(`auth.refresh: invalid duration "${refresh}"`);
+  if (type === 'login') {
+    if (!/^\s+login:/m.test(block)) errs.push('auth.login: required for type login');
+    else {
+      const path = field('path');
+      if (!path) errs.push('auth.login.path: must not be empty');
+      if (!/extract:\s*(\n\s+-|\[\s*\{)/.test(block)) errs.push('auth.login.extract: at least one extract is required');
+    }
+  } else {
+    if (/^\s+login:/m.test(block)) errs.push(`auth.login: only allowed for type login`);
+    if (scope) errs.push('auth.scope: only allowed for type login');
+  }
+  if (type === 'bearer' && !field('token')) errs.push('auth.token: must not be empty for type bearer');
+  if (type === 'basic') {
+    if (!field('username')) errs.push('auth.username: must not be empty for type basic');
+    if (field('value')) errs.push('auth.value: must be empty for type basic');
+  }
+  return errs;
+}
+
 function validate(yaml) {
   const errors = [];
   const lines = yaml.split('\n');
@@ -519,6 +610,7 @@ function validate(yaml) {
     const p = m[1].trim().replace(/^["']|["']$/g, '');
     if (!p.startsWith('/') && !p.startsWith('{{')) errors.push(`steps[${i}].path: must start with "/" or a {{variable}}, got "${p}"`);
   });
+  errors.push(...validateAuth(yaml));
   const okMetrics = ['latency.p50', 'latency.p90', 'latency.p95', 'latency.p99', 'latency.mean', 'latency.max', 'error_rate', 'rps'];
   [...yaml.matchAll(/-\s*metric:\s*(\S+)/g)].forEach((m, i) => {
     if (!okMetrics.includes(m[1])) errors.push(`thresholds[${i}].metric: unknown metric "${m[1]}"`);
