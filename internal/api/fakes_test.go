@@ -21,6 +21,7 @@ type fakeStore struct {
 	runs    map[string]model.Run
 	metrics map[string][]model.MetricPoint
 	errs    map[string][]model.ErrorSample
+	groups  map[string][]model.ErrorGroup
 	lastRF  store.RunFilter
 }
 
@@ -33,6 +34,7 @@ func newFakeStore() *fakeStore {
 		runs:    map[string]model.Run{},
 		metrics: map[string][]model.MetricPoint{},
 		errs:    map[string][]model.ErrorSample{},
+		groups:  map[string][]model.ErrorGroup{},
 	}
 }
 
@@ -276,6 +278,25 @@ func (f *fakeStore) SetBaseline(_ context.Context, testID, runID string) (model.
 
 func (f *fakeStore) RunsSince(context.Context, time.Time) ([]model.Run, error) { return nil, nil }
 
+func (f *fakeStore) SetErrorGroups(_ context.Context, runID string, g []model.ErrorGroup) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.runs[runID]; !ok {
+		return store.ErrNotFound
+	}
+	f.groups[runID] = append([]model.ErrorGroup(nil), g...)
+	return nil
+}
+
+func (f *fakeStore) ListErrorGroups(_ context.Context, runID string) ([]model.ErrorGroup, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.runs[runID]; !ok {
+		return nil, store.ErrNotFound
+	}
+	return append([]model.ErrorGroup{}, f.groups[runID]...), nil
+}
+
 // fakeRunner is a scriptable runner.Runner.
 type fakeRunner struct {
 	mu       sync.Mutex
@@ -289,6 +310,8 @@ type fakeRunner struct {
 	cancelled map[string]chan struct{}
 	workers   []model.Worker
 	lastReq   model.StartRunRequest
+	// groups are the live error groups returned for active runs.
+	groups map[string][]model.ErrorGroup
 }
 
 var _ runner.Runner = (*fakeRunner)(nil)
@@ -358,6 +381,15 @@ func (r *fakeRunner) Subscribe(id string) (<-chan runner.Event, func(), error) {
 	done := r.cancelled[id]
 	var once sync.Once
 	return ch, func() { once.Do(func() { close(done) }) }, nil
+}
+
+func (r *fakeRunner) ErrorGroups(id string) ([]model.ErrorGroup, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active[id] {
+		return nil, runner.ErrNotRunning
+	}
+	return append([]model.ErrorGroup{}, r.groups[id]...), nil
 }
 
 func (r *fakeRunner) Active() []string {

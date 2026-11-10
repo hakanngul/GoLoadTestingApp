@@ -50,6 +50,7 @@ type pendingSecond struct {
 	cpu       float64
 	reporters map[string]bool
 	first     time.Time // real clock time of the first report
+	errs      []model.ErrorGroup
 }
 
 // remoteRun implements RemoteRun.
@@ -81,6 +82,7 @@ type remoteRun struct {
 	pending    map[int64]*pendingSecond
 	emitted    int64 // highest emitted second index
 	queue      []Second
+	carryErrs  []model.ErrorGroup // error counts of late reports, for the next Second
 	ackClosed  bool
 	finishing  bool // every member finished or was lost; no more input
 	late       int64
@@ -250,6 +252,8 @@ func (r *remoteRun) report(id string, mr *pb.MetricReport) {
 		}
 	}
 
+	errs := errorCounts(mr.GetErrorCounts())
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	mb := r.members[id]
@@ -260,6 +264,8 @@ func (r *remoteRun) report(id string, mr *pb.MetricReport) {
 	k := mr.GetSecond()
 	if k <= r.emitted {
 		r.late++
+		// The snapshot is dropped, but error counts are kept exact.
+		r.carryErrs = append(r.carryErrs, errs...)
 		return
 	}
 	ps := r.pending[k]
@@ -276,6 +282,7 @@ func (r *remoteRun) report(id string, mr *pb.MetricReport) {
 		return
 	}
 	ps.reporters[id] = true
+	ps.errs = append(ps.errs, errs...)
 	ps.snap.Merge(snap)
 	ps.target += mr.GetTarget()
 	ps.active += mr.GetActive()
@@ -354,6 +361,14 @@ func (r *remoteRun) memberEndedLocked(id string) {
 	}
 	r.finishing = true
 	r.emitReadyLocked() // flushes everything still pending
+	if len(r.carryErrs) > 0 {
+		if n := len(r.queue); n > 0 {
+			r.queue[n-1].Errors = append(r.queue[n-1].Errors, r.carryErrs...)
+		} else {
+			r.queue = append(r.queue, Second{Index: r.emitted, Errors: r.carryErrs})
+		}
+		r.carryErrs = nil
+	}
 	r.wake.Broadcast()
 }
 
@@ -382,6 +397,11 @@ func (r *remoteRun) emitReadyLocked() {
 			r.queue = r.queue[1:]
 			r.droppedQ++
 		}
+		errs := ps.errs
+		if len(r.carryErrs) > 0 {
+			errs = append(errs, r.carryErrs...)
+			r.carryErrs = nil
+		}
 		r.queue = append(r.queue, Second{
 			Index:    k,
 			Snapshot: ps.snap,
@@ -389,6 +409,7 @@ func (r *remoteRun) emitReadyLocked() {
 			Active:   ps.active,
 			CPU:      ps.cpu,
 			Workers:  len(ps.reporters),
+			Errors:   errs,
 		})
 		r.wake.Signal()
 	}
@@ -448,4 +469,31 @@ func (r *remoteRun) pump() {
 		case <-r.abandoned:
 		}
 	}
+}
+
+// errorCounts converts a worker's per-second error groups.
+func errorCounts(in []*pb.ErrorCount) []model.ErrorGroup {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]model.ErrorGroup, 0, len(in))
+	for _, e := range in {
+		if e.GetCount() <= 0 {
+			continue
+		}
+		g := model.ErrorGroup{
+			Step:    e.GetStep(),
+			Status:  int(e.GetStatus()),
+			Message: e.GetMessage(),
+			Count:   e.GetCount(),
+		}
+		if ns := e.GetFirstUnixNano(); ns != 0 {
+			g.First = time.Unix(0, ns).UTC()
+		}
+		if ns := e.GetLastUnixNano(); ns != 0 {
+			g.Last = time.Unix(0, ns).UTC()
+		}
+		out = append(out, g)
+	}
+	return out
 }

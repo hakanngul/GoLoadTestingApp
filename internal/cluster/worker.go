@@ -27,6 +27,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/data"
 	"github.com/hakanngul/GoLoadTestingApp/internal/engine"
 	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
+	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/executor"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
@@ -376,6 +377,7 @@ func (s *session) execute(ctx context.Context, r *workerRun, msg *pb.StartRun) *
 	}
 	col := metrics.NewCollector(startAt)
 	samples := &errorSampler{max: maxSamples}
+	groups := metrics.NewErrorGrouper(model.MaxErrorGroups, nil)
 	eng := engine.New(sc.Load, engine.Options{
 		Executor: exec,
 		Feeder:   feeder,
@@ -383,6 +385,7 @@ func (s *session) execute(ctx context.Context, r *workerRun, msg *pb.StartRun) *
 			col.Record(res)
 			if res.Err != nil {
 				samples.offer(res)
+				groups.Record(res.Step, res.Status, res.Err)
 			}
 		},
 		OnDropped: col.RecordDropped,
@@ -396,7 +399,7 @@ func (s *session) execute(ctx context.Context, r *workerRun, msg *pb.StartRun) *
 	boundary := func(k int64) time.Time { return startAt.Add(time.Duration(k) * time.Second) }
 	k := int64(1) // the second currently being collected
 	report := func(k int64, end time.Time) {
-		s.report(r.id, k, col.Flush(end), eng, cpu.sample())
+		s.report(r.id, k, col.Flush(end), groups.Drain(), eng, cpu.sample())
 		s.sendSamples(r.id, samples)
 	}
 
@@ -437,8 +440,8 @@ loop:
 	return fin
 }
 
-// report sends one second's interval snapshot.
-func (s *session) report(runID string, k int64, snap *metrics.Snapshot, eng *engine.Engine, cpu float64) {
+// report sends one second's interval snapshot and error-group deltas.
+func (s *session) report(runID string, k int64, snap *metrics.Snapshot, errs []model.ErrorGroup, eng *engine.Engine, cpu float64) {
 	blob, err := snap.MarshalBinary()
 	if err != nil {
 		s.w.log.Error("cluster: encode snapshot", "run", runID, "second", k, "err", err)
@@ -446,13 +449,33 @@ func (s *session) report(runID string, k int64, snap *metrics.Snapshot, eng *eng
 	}
 	target, active := eng.Current()
 	s.send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Metric{Metric: &pb.MetricReport{
-		RunId:    runID,
-		Second:   k,
-		Target:   target,
-		Active:   active,
-		Cpu:      cpu,
-		Snapshot: blob,
+		RunId:       runID,
+		Second:      k,
+		Target:      target,
+		Active:      active,
+		Cpu:         cpu,
+		Snapshot:    blob,
+		ErrorCounts: toErrorCounts(errs),
 	}}})
+}
+
+// toErrorCounts converts error groups to their wire form.
+func toErrorCounts(gs []model.ErrorGroup) []*pb.ErrorCount {
+	if len(gs) == 0 {
+		return nil
+	}
+	out := make([]*pb.ErrorCount, len(gs))
+	for i, g := range gs {
+		e := &pb.ErrorCount{Step: g.Step, Status: int32(g.Status), Message: g.Message, Count: g.Count}
+		if !g.First.IsZero() {
+			e.FirstUnixNano = g.First.UnixNano()
+		}
+		if !g.Last.IsZero() {
+			e.LastUnixNano = g.Last.UnixNano()
+		}
+		out[i] = e
+	}
+	return out
 }
 
 // sendSamples sends error samples collected since the last call.

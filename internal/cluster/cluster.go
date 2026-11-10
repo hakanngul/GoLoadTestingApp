@@ -29,11 +29,19 @@ type RunSpec struct {
 // Second is the merged result of one second across all workers of a run.
 type Second struct {
 	Index    int64             // 1-based second since StartAt
-	Snapshot *metrics.Snapshot // merged interval snapshot
+	Snapshot *metrics.Snapshot // merged interval snapshot; nil for an errors-only Second (see Errors)
 	Target   float64           // sum of worker targets
 	Active   int64             // sum of in-flight iterations
 	CPU      float64           // max worker CPU (0..1)
 	Workers  int               // workers that reported this second
+	// Errors are the workers' error-group delta counts for this second,
+	// concatenated (the same group may appear once per worker; fold them
+	// with metrics.ErrorGrouper.Merge). Counts from reports that arrived
+	// after their second was emitted are carried into the next Second, so
+	// summing Errors over all Seconds counts every failure exactly. If
+	// such late counts remain when the run ends with no further second,
+	// they arrive in a final Second with a nil Snapshot.
+	Errors []model.ErrorGroup
 }
 
 // Result is the final outcome of a distributed run.

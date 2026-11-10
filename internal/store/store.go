@@ -76,5 +76,12 @@ type Store interface {
 	AppendErrorSamples(ctx context.Context, runID string, s []model.ErrorSample) error
 	ListErrorSamples(ctx context.Context, runID string) ([]model.ErrorSample, error)
 
+	// SetErrorGroups replaces the run's error groups (the final counts of
+	// every failure, written when the run ends). Unknown run: ErrNotFound.
+	SetErrorGroups(ctx context.Context, runID string, groups []model.ErrorGroup) error
+	// ListErrorGroups returns the stored groups in the order they were
+	// set (empty, never nil, if none were stored). Unknown run: ErrNotFound.
+	ListErrorGroups(ctx context.Context, runID string) ([]model.ErrorGroup, error)
+
 	Close()
 }

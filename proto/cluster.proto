@@ -49,6 +49,21 @@ message MetricReport {
   int64 active = 4;
   double cpu = 5;
   bytes snapshot = 6;
+  // Error groups of this worker for this second (delta counts; every
+  // failure, not just the sampled ones). At most MaxErrorGroups entries
+  // plus one overflow entry (step "", status 0, message "(other errors)").
+  repeated ErrorCount error_counts = 7;
+}
+
+// Failed requests with the same step, status and message (message cut to
+// 300 runes) counted during one second on one worker.
+message ErrorCount {
+  string step = 1;
+  int32 status = 2;
+  string message = 3;
+  int64 count = 4;
+  int64 first_unix_nano = 5;
+  int64 last_unix_nano = 6;
 }
 
 message ErrorSample {

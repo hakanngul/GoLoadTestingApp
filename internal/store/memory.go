@@ -24,6 +24,7 @@ type Memory struct {
 	runs    map[string]*model.Run
 	metrics map[string][]memMetric         // run ID -> points, sorted by T
 	errs    map[string][]model.ErrorSample // run ID -> samples, sorted by T
+	groups  map[string][]model.ErrorGroup  // run ID -> final error groups
 }
 
 type memTest struct {
@@ -46,6 +47,7 @@ func NewMemory() *Memory {
 		runs:    make(map[string]*model.Run),
 		metrics: make(map[string][]memMetric),
 		errs:    make(map[string][]model.ErrorSample),
+		groups:  make(map[string][]model.ErrorGroup),
 	}
 }
 
@@ -369,6 +371,7 @@ func (m *Memory) deleteRunLocked(id string) {
 	delete(m.runs, id)
 	delete(m.metrics, id)
 	delete(m.errs, id)
+	delete(m.groups, id)
 }
 
 // runLess orders runs newest first (StartedAt desc, then ID desc), the
@@ -472,6 +475,39 @@ func (m *Memory) ListErrorSamples(ctx context.Context, runID string) ([]model.Er
 	defer m.mu.RUnlock()
 	src := m.errs[runID]
 	return append(make([]model.ErrorSample, 0, len(src)), src...), nil
+}
+
+// SetErrorGroups replaces a run's error groups.
+func (m *Memory) SetErrorGroups(ctx context.Context, runID string, groups []model.ErrorGroup) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.runs[runID]; !ok {
+		return ErrNotFound
+	}
+	cp := make([]model.ErrorGroup, len(groups))
+	for i, g := range groups {
+		g.First, g.Last = normTime(g.First), normTime(g.Last)
+		cp[i] = g
+	}
+	m.groups[runID] = cp
+	return nil
+}
+
+// ListErrorGroups returns a run's stored error groups.
+func (m *Memory) ListErrorGroups(ctx context.Context, runID string) ([]model.ErrorGroup, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.runs[runID]; !ok {
+		return nil, ErrNotFound
+	}
+	src := m.groups[runID]
+	return append(make([]model.ErrorGroup, 0, len(src)), src...), nil
 }
 
 // ---- deep-copy helpers ------------------------------------------------------

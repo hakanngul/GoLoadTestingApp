@@ -290,13 +290,17 @@ func (x *Heartbeat) GetRunId() string {
 // One per second per run: an interval metrics.Snapshot (HDR histograms,
 // metrics.Snapshot.MarshalBinary) so the master can merge exactly.
 type MetricReport struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Second        int64                  `protobuf:"varint,2,opt,name=second,proto3" json:"second,omitempty"`  // 1-based second index since StartRun.start_at
-	Target        float64                `protobuf:"fixed64,3,opt,name=target,proto3" json:"target,omitempty"` // this worker's share of the target
-	Active        int64                  `protobuf:"varint,4,opt,name=active,proto3" json:"active,omitempty"`
-	Cpu           float64                `protobuf:"fixed64,5,opt,name=cpu,proto3" json:"cpu,omitempty"`
-	Snapshot      []byte                 `protobuf:"bytes,6,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	RunId    string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Second   int64                  `protobuf:"varint,2,opt,name=second,proto3" json:"second,omitempty"`  // 1-based second index since StartRun.start_at
+	Target   float64                `protobuf:"fixed64,3,opt,name=target,proto3" json:"target,omitempty"` // this worker's share of the target
+	Active   int64                  `protobuf:"varint,4,opt,name=active,proto3" json:"active,omitempty"`
+	Cpu      float64                `protobuf:"fixed64,5,opt,name=cpu,proto3" json:"cpu,omitempty"`
+	Snapshot []byte                 `protobuf:"bytes,6,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	// Error groups of this worker for this second (delta counts; every
+	// failure, not just the sampled ones). At most MaxErrorGroups entries
+	// plus one overflow entry (step "", status 0, message "(other errors)").
+	ErrorCounts   []*ErrorCount `protobuf:"bytes,7,rep,name=error_counts,json=errorCounts,proto3" json:"error_counts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -373,6 +377,99 @@ func (x *MetricReport) GetSnapshot() []byte {
 	return nil
 }
 
+func (x *MetricReport) GetErrorCounts() []*ErrorCount {
+	if x != nil {
+		return x.ErrorCounts
+	}
+	return nil
+}
+
+// Failed requests with the same step, status and message (message cut to
+// 300 runes) counted during one second on one worker.
+type ErrorCount struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Step          string                 `protobuf:"bytes,1,opt,name=step,proto3" json:"step,omitempty"`
+	Status        int32                  `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
+	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	Count         int64                  `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
+	FirstUnixNano int64                  `protobuf:"varint,5,opt,name=first_unix_nano,json=firstUnixNano,proto3" json:"first_unix_nano,omitempty"`
+	LastUnixNano  int64                  `protobuf:"varint,6,opt,name=last_unix_nano,json=lastUnixNano,proto3" json:"last_unix_nano,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ErrorCount) Reset() {
+	*x = ErrorCount{}
+	mi := &file_cluster_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ErrorCount) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ErrorCount) ProtoMessage() {}
+
+func (x *ErrorCount) ProtoReflect() protoreflect.Message {
+	mi := &file_cluster_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ErrorCount.ProtoReflect.Descriptor instead.
+func (*ErrorCount) Descriptor() ([]byte, []int) {
+	return file_cluster_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ErrorCount) GetStep() string {
+	if x != nil {
+		return x.Step
+	}
+	return ""
+}
+
+func (x *ErrorCount) GetStatus() int32 {
+	if x != nil {
+		return x.Status
+	}
+	return 0
+}
+
+func (x *ErrorCount) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *ErrorCount) GetCount() int64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *ErrorCount) GetFirstUnixNano() int64 {
+	if x != nil {
+		return x.FirstUnixNano
+	}
+	return 0
+}
+
+func (x *ErrorCount) GetLastUnixNano() int64 {
+	if x != nil {
+		return x.LastUnixNano
+	}
+	return 0
+}
+
 type ErrorSample struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TUnixNano     int64                  `protobuf:"varint,1,opt,name=t_unix_nano,json=tUnixNano,proto3" json:"t_unix_nano,omitempty"`
@@ -385,7 +482,7 @@ type ErrorSample struct {
 
 func (x *ErrorSample) Reset() {
 	*x = ErrorSample{}
-	mi := &file_cluster_proto_msgTypes[4]
+	mi := &file_cluster_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -397,7 +494,7 @@ func (x *ErrorSample) String() string {
 func (*ErrorSample) ProtoMessage() {}
 
 func (x *ErrorSample) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_proto_msgTypes[4]
+	mi := &file_cluster_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -410,7 +507,7 @@ func (x *ErrorSample) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorSample.ProtoReflect.Descriptor instead.
 func (*ErrorSample) Descriptor() ([]byte, []int) {
-	return file_cluster_proto_rawDescGZIP(), []int{4}
+	return file_cluster_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ErrorSample) GetTUnixNano() int64 {
@@ -451,7 +548,7 @@ type ErrorSamples struct {
 
 func (x *ErrorSamples) Reset() {
 	*x = ErrorSamples{}
-	mi := &file_cluster_proto_msgTypes[5]
+	mi := &file_cluster_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -463,7 +560,7 @@ func (x *ErrorSamples) String() string {
 func (*ErrorSamples) ProtoMessage() {}
 
 func (x *ErrorSamples) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_proto_msgTypes[5]
+	mi := &file_cluster_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -476,7 +573,7 @@ func (x *ErrorSamples) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorSamples.ProtoReflect.Descriptor instead.
 func (*ErrorSamples) Descriptor() ([]byte, []int) {
-	return file_cluster_proto_rawDescGZIP(), []int{5}
+	return file_cluster_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ErrorSamples) GetRunId() string {
@@ -504,7 +601,7 @@ type RunFinished struct {
 
 func (x *RunFinished) Reset() {
 	*x = RunFinished{}
-	mi := &file_cluster_proto_msgTypes[6]
+	mi := &file_cluster_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -516,7 +613,7 @@ func (x *RunFinished) String() string {
 func (*RunFinished) ProtoMessage() {}
 
 func (x *RunFinished) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_proto_msgTypes[6]
+	mi := &file_cluster_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -529,7 +626,7 @@ func (x *RunFinished) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunFinished.ProtoReflect.Descriptor instead.
 func (*RunFinished) Descriptor() ([]byte, []int) {
-	return file_cluster_proto_rawDescGZIP(), []int{6}
+	return file_cluster_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RunFinished) GetRunId() string {
@@ -566,7 +663,7 @@ type MasterMessage struct {
 
 func (x *MasterMessage) Reset() {
 	*x = MasterMessage{}
-	mi := &file_cluster_proto_msgTypes[7]
+	mi := &file_cluster_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -578,7 +675,7 @@ func (x *MasterMessage) String() string {
 func (*MasterMessage) ProtoMessage() {}
 
 func (x *MasterMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_proto_msgTypes[7]
+	mi := &file_cluster_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -591,7 +688,7 @@ func (x *MasterMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MasterMessage.ProtoReflect.Descriptor instead.
 func (*MasterMessage) Descriptor() ([]byte, []int) {
-	return file_cluster_proto_rawDescGZIP(), []int{7}
+	return file_cluster_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *MasterMessage) GetMsg() isMasterMessage_Msg {
@@ -650,7 +747,7 @@ type StartRun struct {
 
 func (x *StartRun) Reset() {
 	*x = StartRun{}
-	mi := &file_cluster_proto_msgTypes[8]
+	mi := &file_cluster_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -662,7 +759,7 @@ func (x *StartRun) String() string {
 func (*StartRun) ProtoMessage() {}
 
 func (x *StartRun) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_proto_msgTypes[8]
+	mi := &file_cluster_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -675,7 +772,7 @@ func (x *StartRun) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartRun.ProtoReflect.Descriptor instead.
 func (*StartRun) Descriptor() ([]byte, []int) {
-	return file_cluster_proto_rawDescGZIP(), []int{8}
+	return file_cluster_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *StartRun) GetRunId() string {
@@ -736,7 +833,7 @@ type StopRun struct {
 
 func (x *StopRun) Reset() {
 	*x = StopRun{}
-	mi := &file_cluster_proto_msgTypes[9]
+	mi := &file_cluster_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -748,7 +845,7 @@ func (x *StopRun) String() string {
 func (*StopRun) ProtoMessage() {}
 
 func (x *StopRun) ProtoReflect() protoreflect.Message {
-	mi := &file_cluster_proto_msgTypes[9]
+	mi := &file_cluster_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -761,7 +858,7 @@ func (x *StopRun) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopRun.ProtoReflect.Descriptor instead.
 func (*StopRun) Descriptor() ([]byte, []int) {
-	return file_cluster_proto_rawDescGZIP(), []int{9}
+	return file_cluster_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StopRun) GetRunId() string {
@@ -791,14 +888,23 @@ const file_cluster_proto_rawDesc = "" +
 	"\tHeartbeat\x12\x10\n" +
 	"\x03cpu\x18\x01 \x01(\x01R\x03cpu\x12\x16\n" +
 	"\x06active\x18\x02 \x01(\x03R\x06active\x12\x15\n" +
-	"\x06run_id\x18\x03 \x01(\tR\x05runId\"\x9b\x01\n" +
+	"\x06run_id\x18\x03 \x01(\tR\x05runId\"\xdd\x01\n" +
 	"\fMetricReport\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
 	"\x06second\x18\x02 \x01(\x03R\x06second\x12\x16\n" +
 	"\x06target\x18\x03 \x01(\x01R\x06target\x12\x16\n" +
 	"\x06active\x18\x04 \x01(\x03R\x06active\x12\x10\n" +
 	"\x03cpu\x18\x05 \x01(\x01R\x03cpu\x12\x1a\n" +
-	"\bsnapshot\x18\x06 \x01(\fR\bsnapshot\"s\n" +
+	"\bsnapshot\x18\x06 \x01(\fR\bsnapshot\x12@\n" +
+	"\ferror_counts\x18\a \x03(\v2\x1d.goload.cluster.v1.ErrorCountR\verrorCounts\"\xb6\x01\n" +
+	"\n" +
+	"ErrorCount\x12\x12\n" +
+	"\x04step\x18\x01 \x01(\tR\x04step\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\x05R\x06status\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\x12\x14\n" +
+	"\x05count\x18\x04 \x01(\x03R\x05count\x12&\n" +
+	"\x0ffirst_unix_nano\x18\x05 \x01(\x03R\rfirstUnixNano\x12$\n" +
+	"\x0elast_unix_nano\x18\x06 \x01(\x03R\flastUnixNano\"s\n" +
 	"\vErrorSample\x12\x1e\n" +
 	"\vt_unix_nano\x18\x01 \x01(\x03R\ttUnixNano\x12\x12\n" +
 	"\x04step\x18\x02 \x01(\tR\x04step\x12\x16\n" +
@@ -844,37 +950,39 @@ func file_cluster_proto_rawDescGZIP() []byte {
 	return file_cluster_proto_rawDescData
 }
 
-var file_cluster_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_cluster_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_cluster_proto_goTypes = []any{
 	(*WorkerMessage)(nil), // 0: goload.cluster.v1.WorkerMessage
 	(*Hello)(nil),         // 1: goload.cluster.v1.Hello
 	(*Heartbeat)(nil),     // 2: goload.cluster.v1.Heartbeat
 	(*MetricReport)(nil),  // 3: goload.cluster.v1.MetricReport
-	(*ErrorSample)(nil),   // 4: goload.cluster.v1.ErrorSample
-	(*ErrorSamples)(nil),  // 5: goload.cluster.v1.ErrorSamples
-	(*RunFinished)(nil),   // 6: goload.cluster.v1.RunFinished
-	(*MasterMessage)(nil), // 7: goload.cluster.v1.MasterMessage
-	(*StartRun)(nil),      // 8: goload.cluster.v1.StartRun
-	(*StopRun)(nil),       // 9: goload.cluster.v1.StopRun
-	nil,                   // 10: goload.cluster.v1.StartRun.FilesEntry
+	(*ErrorCount)(nil),    // 4: goload.cluster.v1.ErrorCount
+	(*ErrorSample)(nil),   // 5: goload.cluster.v1.ErrorSample
+	(*ErrorSamples)(nil),  // 6: goload.cluster.v1.ErrorSamples
+	(*RunFinished)(nil),   // 7: goload.cluster.v1.RunFinished
+	(*MasterMessage)(nil), // 8: goload.cluster.v1.MasterMessage
+	(*StartRun)(nil),      // 9: goload.cluster.v1.StartRun
+	(*StopRun)(nil),       // 10: goload.cluster.v1.StopRun
+	nil,                   // 11: goload.cluster.v1.StartRun.FilesEntry
 }
 var file_cluster_proto_depIdxs = []int32{
 	1,  // 0: goload.cluster.v1.WorkerMessage.hello:type_name -> goload.cluster.v1.Hello
 	2,  // 1: goload.cluster.v1.WorkerMessage.heartbeat:type_name -> goload.cluster.v1.Heartbeat
 	3,  // 2: goload.cluster.v1.WorkerMessage.metric:type_name -> goload.cluster.v1.MetricReport
-	5,  // 3: goload.cluster.v1.WorkerMessage.errors:type_name -> goload.cluster.v1.ErrorSamples
-	6,  // 4: goload.cluster.v1.WorkerMessage.finished:type_name -> goload.cluster.v1.RunFinished
-	4,  // 5: goload.cluster.v1.ErrorSamples.samples:type_name -> goload.cluster.v1.ErrorSample
-	8,  // 6: goload.cluster.v1.MasterMessage.start:type_name -> goload.cluster.v1.StartRun
-	9,  // 7: goload.cluster.v1.MasterMessage.stop:type_name -> goload.cluster.v1.StopRun
-	10, // 8: goload.cluster.v1.StartRun.files:type_name -> goload.cluster.v1.StartRun.FilesEntry
-	0,  // 9: goload.cluster.v1.Coordinator.Connect:input_type -> goload.cluster.v1.WorkerMessage
-	7,  // 10: goload.cluster.v1.Coordinator.Connect:output_type -> goload.cluster.v1.MasterMessage
-	10, // [10:11] is the sub-list for method output_type
-	9,  // [9:10] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	6,  // 3: goload.cluster.v1.WorkerMessage.errors:type_name -> goload.cluster.v1.ErrorSamples
+	7,  // 4: goload.cluster.v1.WorkerMessage.finished:type_name -> goload.cluster.v1.RunFinished
+	4,  // 5: goload.cluster.v1.MetricReport.error_counts:type_name -> goload.cluster.v1.ErrorCount
+	5,  // 6: goload.cluster.v1.ErrorSamples.samples:type_name -> goload.cluster.v1.ErrorSample
+	9,  // 7: goload.cluster.v1.MasterMessage.start:type_name -> goload.cluster.v1.StartRun
+	10, // 8: goload.cluster.v1.MasterMessage.stop:type_name -> goload.cluster.v1.StopRun
+	11, // 9: goload.cluster.v1.StartRun.files:type_name -> goload.cluster.v1.StartRun.FilesEntry
+	0,  // 10: goload.cluster.v1.Coordinator.Connect:input_type -> goload.cluster.v1.WorkerMessage
+	8,  // 11: goload.cluster.v1.Coordinator.Connect:output_type -> goload.cluster.v1.MasterMessage
+	11, // [11:12] is the sub-list for method output_type
+	10, // [10:11] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_cluster_proto_init() }
@@ -889,7 +997,7 @@ func file_cluster_proto_init() {
 		(*WorkerMessage_Errors)(nil),
 		(*WorkerMessage_Finished)(nil),
 	}
-	file_cluster_proto_msgTypes[7].OneofWrappers = []any{
+	file_cluster_proto_msgTypes[8].OneofWrappers = []any{
 		(*MasterMessage_Start)(nil),
 		(*MasterMessage_Stop)(nil),
 	}
@@ -899,7 +1007,7 @@ func file_cluster_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cluster_proto_rawDesc), len(file_cluster_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

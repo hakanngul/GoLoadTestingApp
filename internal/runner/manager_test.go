@@ -484,12 +484,19 @@ func TestSubscribeReceivesStatusMetricsDone(t *testing.T) {
 	if last.Type != EventDone || last.Run == nil || last.Run.Status != model.RunPassed || last.Run.Summary == nil {
 		t.Fatalf("last event = %+v", last)
 	}
-	metricsSeen := 0
+	metricsSeen, statsSeen := 0, 0
 	for _, ev := range got[1 : len(got)-1] {
-		if ev.Type != EventMetric || ev.Metric == nil {
+		switch {
+		case ev.Type == EventMetric && ev.Metric != nil:
+			metricsSeen++
+		case ev.Type == EventStats && ev.Stats != nil:
+			statsSeen++
+		default:
 			t.Fatalf("unexpected middle event %+v", ev)
 		}
-		metricsSeen++
+	}
+	if statsSeen < 2 {
+		t.Fatalf("got %d stats events, want >= 2", statsSeen)
 	}
 	if metricsSeen < 2 {
 		t.Fatalf("got %d metric events, want >= 2", metricsSeen)

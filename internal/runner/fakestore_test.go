@@ -21,6 +21,7 @@ type fakeStore struct {
 	metrics   map[string][]model.MetricPoint
 	snapshots map[string][][]byte
 	samples   map[string][]model.ErrorSample
+	groups    map[string][]model.ErrorGroup
 
 	failMetrics bool // AppendMetric / AppendErrorSamples return an error
 }
@@ -34,6 +35,7 @@ func newFakeStore() *fakeStore {
 		metrics:   map[string][]model.MetricPoint{},
 		snapshots: map[string][][]byte{},
 		samples:   map[string][]model.ErrorSample{},
+		groups:    map[string][]model.ErrorGroup{},
 	}
 }
 
@@ -146,6 +148,25 @@ func (s *fakeStore) ListErrorSamples(_ context.Context, runID string) ([]model.E
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]model.ErrorSample(nil), s.samples[runID]...), nil
+}
+
+func (s *fakeStore) SetErrorGroups(_ context.Context, runID string, g []model.ErrorGroup) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.runs[runID]; !ok {
+		return store.ErrNotFound
+	}
+	s.groups[runID] = append([]model.ErrorGroup(nil), g...)
+	return nil
+}
+
+func (s *fakeStore) ListErrorGroups(_ context.Context, runID string) ([]model.ErrorGroup, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.runs[runID]; !ok {
+		return nil, store.ErrNotFound
+	}
+	return append([]model.ErrorGroup{}, s.groups[runID]...), nil
 }
 
 func (s *fakeStore) Close() {}

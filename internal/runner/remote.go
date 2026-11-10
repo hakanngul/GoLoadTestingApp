@@ -150,10 +150,18 @@ func (m *Manager) executeRemote(ctx context.Context, ar *activeRun, sc *scenario
 				seconds = nil
 				continue
 			}
-			cum.Merge(sec.Snapshot)
-			peakCPU = max(peakCPU, sec.CPU)
-			m.setCPU(sec.CPU)
-			m.emit(ar, sec.Snapshot, time.Duration(sec.Index)*time.Second, sec.Target, sec.Active, sec.CPU, sec.Workers)
+			ar.groups.Merge(sec.Errors)
+			elapsed := time.Duration(sec.Index) * time.Second
+			var cur metrics.Summary
+			if sec.Snapshot != nil {
+				cum.Merge(sec.Snapshot)
+				peakCPU = max(peakCPU, sec.CPU)
+				m.setCPU(sec.CPU)
+				cur = m.emit(ar, sec.Snapshot, elapsed, sec.Target, sec.Active, sec.CPU, sec.Workers)
+			}
+			// cum is the running merged snapshot: summarizing it costs
+			// about as much as summarizing the interval.
+			m.publishStats(ar, elapsed, metrics.Summarize(cum), cur)
 		case batch, ok := <-errs:
 			if !ok {
 				errs = nil
@@ -195,6 +203,7 @@ func (m *Manager) executeRemote(ctx context.Context, ar *activeRun, sc *scenario
 		cum.Total = metrics.NewStats()
 	}
 	final := m.finalRun(ar, sc, metrics.Summarize(cum), runErr, peakCPU)
+	m.storeErrorGroups(runID, ar.groups)
 	for _, id := range res.LostWorkers {
 		final.Warnings = append(final.Warnings, fmt.Sprintf(
 			"worker %s was lost mid-run; generated load was lower than the target from that point", id))

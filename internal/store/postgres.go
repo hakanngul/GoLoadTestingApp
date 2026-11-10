@@ -781,6 +781,55 @@ func (p *Postgres) ListErrorSamples(ctx context.Context, runID string) ([]model.
 	return out, nil
 }
 
+// SetErrorGroups replaces a run's error groups (stored as jsonb).
+func (p *Postgres) SetErrorGroups(ctx context.Context, runID string, groups []model.ErrorGroup) error {
+	if !isUUID(runID) {
+		return ErrNotFound
+	}
+	cp := make([]model.ErrorGroup, len(groups))
+	for i, g := range groups {
+		g.First, g.Last = normTime(g.First), normTime(g.Last)
+		cp[i] = g
+	}
+	b, err := json.Marshal(cp)
+	if err != nil {
+		return fmt.Errorf("store: encode error groups: %w", err)
+	}
+	tag, err := p.pool.Exec(ctx, `UPDATE runs SET error_groups = $2 WHERE id = $1`, runID, b)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListErrorGroups returns a run's stored error groups.
+func (p *Postgres) ListErrorGroups(ctx context.Context, runID string) ([]model.ErrorGroup, error) {
+	if !isUUID(runID) {
+		return nil, ErrNotFound
+	}
+	var b []byte
+	err := p.pool.QueryRow(ctx, `SELECT COALESCE(error_groups, '[]'::jsonb) FROM runs WHERE id = $1`, runID).Scan(&b)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	out := []model.ErrorGroup{}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, fmt.Errorf("store: decode error groups: %w", err)
+	}
+	for i := range out {
+		if !out[i].First.IsZero() {
+			out[i].First = out[i].First.UTC()
+		}
+		if !out[i].Last.IsZero() {
+			out[i].Last = out[i].Last.UTC()
+		}
+	}
+	return out, nil
+}
+
 // UpdateRunMeta sets label and/or notes (nil = unchanged).
 func (p *Postgres) UpdateRunMeta(ctx context.Context, id string, label, notes *string) (model.Run, error) {
 	if !isUUID(id) {

@@ -115,6 +115,33 @@ func (s *server) handleRunErrors(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, nonNil(samples))
 }
 
+// handleRunErrorGroups serves GET /api/runs/{id}/error-groups: the live
+// groups of an active run, otherwise the groups stored when it ended.
+func (s *server) handleRunErrorGroups(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	groups, err := s.runner.ErrorGroups(id)
+	if err == nil {
+		writeJSON(w, http.StatusOK, nonNil(groups))
+		return
+	}
+	if !errors.Is(err, runner.ErrNotRunning) {
+		s.writeErr(w, r, err)
+		return
+	}
+	// The runner stores the final groups before it forgets the run, so a
+	// run that is no longer active has them in the store.
+	if _, err := s.store.GetRun(r.Context(), id); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	groups, err = s.store.ListErrorGroups(r.Context(), id)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, nonNil(groups))
+}
+
 // normalizeRun makes list fields encode as [] instead of null.
 func normalizeRun(r model.Run) model.Run {
 	r.Thresholds = nonNil(r.Thresholds)

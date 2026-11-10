@@ -115,6 +115,7 @@ func (s *server) routes() {
 	m.HandleFunc("POST /api/runs/{id}/stop", s.handleStopRun)
 	m.HandleFunc("GET /api/runs/{id}/metrics", s.handleRunMetrics)
 	m.HandleFunc("GET /api/runs/{id}/errors", s.handleRunErrors)
+	m.HandleFunc("GET /api/runs/{id}/error-groups", s.handleRunErrorGroups)
 	m.HandleFunc("GET /api/runs/{id}/stream", s.handleStream)
 
 	m.HandleFunc("GET /api/workers", s.handleWorkers)

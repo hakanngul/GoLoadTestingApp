@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
+	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 )
 
@@ -55,6 +56,41 @@ func printSummary(w io.Writer, s metrics.Summary, rs []metrics.ThresholdResult) 
 		}
 		fmt.Fprintf(w, "  %s  %s %s %g  (actual %.3f)\n", mark, r.Threshold.Metric, r.Threshold.Op, r.Threshold.Value, r.Actual)
 	}
+}
+
+// printErrorGroups prints the top n error groups (already sorted, most
+// frequent first). Nothing is printed when there were no failures.
+func printErrorGroups(w io.Writer, gs []model.ErrorGroup, n int) {
+	if len(gs) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\n== errors ==")
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "count\tstep\tstatus\tmessage")
+	for i, g := range gs {
+		if i == n {
+			rest := int64(0)
+			for _, r := range gs[n:] {
+				rest += r.Count
+			}
+			fmt.Fprintf(tw, "%d\t\t\t(%d more groups)\n", rest, len(gs)-n)
+			break
+		}
+		status := "-"
+		if g.Status != 0 {
+			status = fmt.Sprint(g.Status)
+		}
+		step := g.Step
+		if step == "" {
+			step = "-"
+		}
+		msg := g.Message
+		if r := []rune(msg); len(r) > 120 {
+			msg = string(r[:120]) + "…"
+		}
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\n", g.Count, step, status, msg)
+	}
+	tw.Flush()
 }
 
 func row(w io.Writer, name string, s metrics.Summary) {

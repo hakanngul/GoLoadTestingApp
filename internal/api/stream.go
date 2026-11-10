@@ -15,7 +15,8 @@ import (
 // handleStream serves GET /api/runs/{id}/stream as Server-Sent Events.
 //
 // For an active run it relays runner events (`metric` with a
-// model.MetricPoint, `status`/`done` with a model.Run) until the done
+// model.MetricPoint, `stats` with a model.LiveStats, `status`/`done` with
+// a model.Run) until the done
 // event, the channel closing or the client disconnecting, with a `: ping`
 // comment every heartbeat interval. For a run that is not active it sends
 // a single `done` event carrying the stored run and returns.
@@ -63,6 +64,8 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case ev.Metric != nil:
 				payload = ev.Metric
+			case ev.Stats != nil:
+				payload = ev.Stats
 			case ev.Run != nil:
 				payload = normalizeRun(*ev.Run)
 			}

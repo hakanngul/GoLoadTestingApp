@@ -199,3 +199,14 @@ func (c *Collector) Cumulative() *Snapshot {
 	}
 	return out
 }
+
+// CumulativeSummary summarizes everything flushed so far (pending,
+// unflushed results are not included) without copying any histogram. It
+// is the cheap way to get the running per-step table once per Flush:
+// unlike Cumulative it neither clones the cumulative histograms nor takes
+// shard locks, so Record is never blocked by it.
+func (c *Collector) CumulativeSummary() Summary {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return Summarize(c.cum)
+}

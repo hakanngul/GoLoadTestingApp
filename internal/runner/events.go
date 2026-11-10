@@ -4,18 +4,21 @@ import (
 	"context"
 	"sync"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 )
 
 // activeRun is the in-memory state of one run between Start and the end
 // of its goroutine.
 type activeRun struct {
-	cancel context.CancelFunc // cancels the engine context
-	remote bool               // executes on remote workers, not in-process
+	cancel context.CancelFunc    // cancels the engine context
+	remote bool                  // executes on remote workers, not in-process
+	groups *metrics.ErrorGrouper // every failure of the run, grouped
 
 	mu       sync.Mutex
-	run      model.Run // latest known record
-	finished bool      // done published; no more subscribers accepted
+	run      model.Run        // latest known record
+	stats    *model.LiveStats // latest live stats (nil before the first tick)
+	finished bool             // done published; no more subscribers accepted
 	subs     map[*subscriber]struct{}
 }
 
@@ -49,6 +52,12 @@ func (ar *activeRun) subscribe(buffer int) (<-chan Event, func(), error) {
 	sub := &subscriber{ch: make(chan Event, buffer)}
 	r := ar.run
 	sub.ch <- Event{Type: EventStatus, Run: &r} // fresh channel: never blocks
+	if ar.stats != nil {
+		select {
+		case sub.ch <- Event{Type: EventStats, Stats: ar.stats}:
+		default: // buffer of 1: the next tick brings fresh stats anyway
+		}
+	}
 	ar.subs[sub] = struct{}{}
 
 	cancel := func() {
@@ -103,6 +112,15 @@ func (ar *activeRun) finish(final model.Run) {
 		close(sub.ch)
 		delete(ar.subs, sub)
 	}
+}
+
+// publishStats records ls as the latest live stats (sent to new
+// subscribers) and publishes it. ls must not be mutated afterwards.
+func (ar *activeRun) publishStats(ls *model.LiveStats) {
+	ar.mu.Lock()
+	ar.stats = ls
+	ar.mu.Unlock()
+	ar.publish(Event{Type: EventStats, Stats: ls})
 }
 
 // setRun replaces the latest known record (e.g. queued -> running) and

@@ -17,6 +17,7 @@ import (
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
 	"github.com/hakanngul/GoLoadTestingApp/internal/data"
+	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/executor"
 	"github.com/hakanngul/GoLoadTestingApp/internal/provision"
@@ -294,6 +295,7 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 	ar := &activeRun{
 		cancel: cancel,
 		remote: plan != nil,
+		groups: metrics.NewErrorGrouper(model.MaxErrorGroups, m.now),
 		run:    run,
 		subs:   make(map[*subscriber]struct{}),
 	}
@@ -377,7 +379,9 @@ func (m *Manager) Stop(runID string) error {
 }
 
 // Subscribe returns live events for an active run: first an EventStatus
-// with the current Run, then EventMetric once per second and finally
+// with the current Run and, once the run has completed its first second,
+// an EventStats with the latest model.LiveStats; then EventMetric and
+// EventStats once per second and finally
 // EventDone, after which the channel is closed. A subscriber that does not
 // keep up loses metric/status events but always receives EventDone.
 // cancel unsubscribes and closes the channel; it is idempotent. Events
@@ -388,6 +392,17 @@ func (m *Manager) Subscribe(runID string) (<-chan Event, func(), error) {
 		return nil, nil, ErrNotRunning
 	}
 	return ar.subscribe(m.subBuffer)
+}
+
+// ErrorGroups returns the live error groups of an active run (most
+// frequent first), or ErrNotRunning when the run is not active; callers
+// then read the stored groups.
+func (m *Manager) ErrorGroups(runID string) ([]model.ErrorGroup, error) {
+	ar := m.lookup(runID)
+	if ar == nil {
+		return nil, ErrNotRunning
+	}
+	return ar.groups.Snapshot(), nil
 }
 
 // Active lists the IDs of runs in progress, sorted.

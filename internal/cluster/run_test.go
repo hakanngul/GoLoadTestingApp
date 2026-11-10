@@ -177,3 +177,53 @@ func TestRunStopSendsStopRun(t *testing.T) {
 	}
 	<-r.Done()
 }
+
+func errMetric(t *testing.T, sec int64, step string, count int64) *pb.MetricReport {
+	m := metric(t, sec, 1)
+	m.ErrorCounts = []*pb.ErrorCount{{Step: step, Status: 503, Message: "status 503", Count: count, FirstUnixNano: 1, LastUnixNano: 2}}
+	return m
+}
+
+func sumErrors(ss ...Second) int64 {
+	var n int64
+	for _, s := range ss {
+		for _, e := range s.Errors {
+			n += e.Count
+		}
+	}
+	return n
+}
+
+func TestRunErrorCountsMergedAndLateCarried(t *testing.T) {
+	r := newRemoteRun("r", fakeConns("a", "b"), 100*time.Millisecond, quiet)
+	r.report("a", errMetric(t, 1, "x", 3))
+	s1 := nextSecond(t, r, 2*time.Second) // grace expired without b
+	if sumErrors(s1) != 3 {
+		t.Fatalf("second 1 errors = %+v", s1.Errors)
+	}
+	r.report("b", errMetric(t, 1, "x", 4)) // late: snapshot dropped, errors carried
+	r.report("a", errMetric(t, 2, "x", 1))
+	r.report("b", errMetric(t, 2, "y", 2))
+	s2 := nextSecond(t, r, 2*time.Second)
+	if s2.Index != 2 || sumErrors(s2) != 7 || len(s2.Errors) != 3 {
+		t.Fatalf("second 2 errors = %+v", s2.Errors)
+	}
+	if e := s2.Errors[0]; e.Step != "x" || e.Status != 503 || e.Message != "status 503" || e.First.UnixNano() != 1 || e.Last.UnixNano() != 2 {
+		t.Fatalf("converted = %+v", e)
+	}
+
+	// A late report right before the end arrives in a final errors-only second.
+	r.report("a", errMetric(t, 3, "x", 1))
+	s3 := nextSecond(t, r, 2*time.Second)
+	r.report("b", errMetric(t, 3, "x", 5))
+	r.finished("a", &pb.RunFinished{RunId: "r"})
+	r.finished("b", &pb.RunFinished{RunId: "r"})
+	var rest []Second
+	for s := range r.Seconds() {
+		rest = append(rest, s)
+	}
+	if sumErrors(s3) != 1 || len(rest) != 1 || rest[0].Snapshot != nil || sumErrors(rest...) != 5 {
+		t.Fatalf("s3 %+v rest %+v", s3.Errors, rest)
+	}
+	<-r.Done()
+}

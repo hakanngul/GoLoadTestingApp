@@ -15,6 +15,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/data"
 	"github.com/hakanngul/GoLoadTestingApp/internal/engine"
 	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
+	"github.com/hakanngul/GoLoadTestingApp/internal/protocol"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/executor"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/httpx"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
@@ -61,10 +62,16 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 
 	start := time.Now()
 	col := metrics.NewCollector(start)
+	groups := metrics.NewErrorGrouper(0, nil)
 	eng := engine.New(sc.Load, engine.Options{
-		Executor:  exec,
-		Feeder:    feeder,
-		Sink:      col.Record,
+		Executor: exec,
+		Feeder:   feeder,
+		Sink: func(r protocol.Result) {
+			col.Record(r)
+			if r.Err != nil {
+				groups.Record(r.Step, r.Status, r.Err)
+			}
+		},
 		OnDropped: col.RecordDropped,
 	})
 
@@ -118,6 +125,7 @@ loop:
 	}
 
 	printSummary(stdout, sum, results)
+	printErrorGroups(stdout, groups.Snapshot(), 10)
 	switch {
 	case interrupted:
 		fmt.Fprintln(stdout, "\nrun interrupted; results are partial")

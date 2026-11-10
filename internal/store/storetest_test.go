@@ -35,6 +35,7 @@ func runStoreSuite(t *testing.T, newStore func(t *testing.T) Store) {
 		{"CascadeDelete", testCascadeDelete},
 		{"Metrics", testMetrics},
 		{"ErrorSamples", testErrorSamples},
+		{"ErrorGroups", testErrorGroups},
 		{"MarkInterrupted", testMarkInterrupted},
 		{"NoAliasing", testNoAliasing},
 		{"Concurrent", testConcurrent},
@@ -735,6 +736,61 @@ func testErrorSamples(t *testing.T, s Store) {
 		t.Fatal(err)
 	}
 	jsonEq(t, "error samples", got, []model.ErrorSample{batch1[1], batch2[0], batch1[0], batch2[1]})
+}
+
+func testErrorGroups(t *testing.T, s Store) {
+	tt := mustTest(t, s, "groups")
+	r := mustRun(t, s, model.Run{TestID: tt.ID})
+	c := ctx(t)
+
+	got, err := s.ListErrorGroups(c, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonEq(t, "no groups", got, []model.ErrorGroup{})
+
+	groups := []model.ErrorGroup{
+		{Step: "login", Status: 503, Message: "unavailable – ünïcödé", Count: 1234,
+			First: base, Last: base.Add(90*time.Second + 999*time.Nanosecond)},
+		{Step: "home", Status: 0, Message: "dial tcp: connection refused", Count: 7, First: base, Last: base},
+		{Message: model.ErrorGroupOther, Count: 3},
+	}
+	if err := s.SetErrorGroups(c, r.ID, groups); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.ListErrorGroups(c, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append([]model.ErrorGroup(nil), groups...)
+	want[0].Last = base.Add(90 * time.Second) // microsecond precision
+	jsonEq(t, "groups", got, want)
+
+	// Replace, not append.
+	if err := s.SetErrorGroups(c, r.ID, groups[1:2]); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.ListErrorGroups(c, r.ID)
+	jsonEq(t, "replaced groups", got, want[1:2])
+	got[0].Count = 999 // no aliasing
+	again, _ := s.ListErrorGroups(c, r.ID)
+	if again[0].Count != 7 {
+		t.Fatal("ListErrorGroups aliases internal state")
+	}
+
+	wantErr(t, "SetErrorGroups unknown", s.SetErrorGroups(c, missingID, groups), ErrNotFound)
+	wantErr(t, "SetErrorGroups bad id", s.SetErrorGroups(c, "nope", groups), ErrNotFound)
+	_, err = s.ListErrorGroups(c, missingID)
+	wantErr(t, "ListErrorGroups unknown", err, ErrNotFound)
+	_, err = s.ListErrorGroups(c, "nope")
+	wantErr(t, "ListErrorGroups bad id", err, ErrNotFound)
+
+	// Deleting the run removes its groups.
+	if err := s.DeleteRun(c, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.ListErrorGroups(c, r.ID)
+	wantErr(t, "ListErrorGroups deleted", err, ErrNotFound)
 }
 
 func testMarkInterrupted(t *testing.T, s Store) {

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 )
 
 // testTarget serves a login → me flow so the full pipeline is exercised:
@@ -157,5 +159,23 @@ func TestUnknownCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := dispatch([]string{"nope"}, &stdout, &stderr); code != exitUsage {
 		t.Fatalf("exit %d", code)
+	}
+}
+
+func TestPrintErrorGroups(t *testing.T) {
+	var b bytes.Buffer
+	printErrorGroups(&b, nil, 10)
+	if b.Len() != 0 {
+		t.Fatalf("printed %q for no errors", b.String())
+	}
+	var gs []model.ErrorGroup
+	for i := 0; i < 12; i++ {
+		gs = append(gs, model.ErrorGroup{Step: fmt.Sprintf("s%d", i), Status: 500, Message: "boom", Count: int64(20 - i)})
+	}
+	printErrorGroups(&b, gs, 10)
+	out := b.String()
+	if !strings.Contains(out, "== errors ==") || !strings.Contains(strings.Join(strings.Fields(out), " "), "20 s0 500 boom") ||
+		!strings.Contains(out, "(2 more groups)") || strings.Contains(out, "s10") {
+		t.Fatalf("output:\n%s", out)
 	}
 }

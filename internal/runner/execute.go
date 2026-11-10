@@ -38,6 +38,7 @@ func (m *Manager) execute(ctx context.Context, ar *activeRun, sc *scenario.Scena
 	start := time.Now()
 	col := metrics.NewCollector(start)
 	samples := &errorSampler{max: int64(m.maxSamples), now: m.now}
+	groups := ar.groups
 	eng := engine.New(sc.Load, engine.Options{
 		Executor: exec,
 		Feeder:   feeder,
@@ -45,6 +46,7 @@ func (m *Manager) execute(ctx context.Context, ar *activeRun, sc *scenario.Scena
 			col.Record(r)
 			if r.Err != nil {
 				samples.offer(r)
+				groups.Record(r.Step, r.Status, r.Err)
 			}
 		},
 		OnDropped: col.RecordDropped,
@@ -71,7 +73,11 @@ loop:
 	for {
 		select {
 		case now := <-ticker.C:
-			m.emitPoint(ar, col.Flush(now), now.Sub(start), eng, sampleCPU())
+			cur := m.emitPoint(ar, col.Flush(now), now.Sub(start), eng, sampleCPU())
+			// CumulativeSummary reuses the collector's running cumulative
+			// snapshot (no histogram copies): ~2.5ms per tick for 10 steps,
+			// about the cost of summarizing the interval itself.
+			m.publishStats(ar, now.Sub(start), col.CumulativeSummary(), cur)
 			m.flushSamples(runID, samples)
 		case runErr = <-done:
 			break loop
@@ -81,15 +87,52 @@ loop:
 	// The tail since the last tick becomes a final (shorter) point if it
 	// holds any traffic.
 	now := time.Now()
+	var cur metrics.Summary
 	if tail := col.Flush(now); tail.Total.Requests > 0 || tail.Dropped > 0 {
-		m.emitPoint(ar, tail, now.Sub(start), eng, sampleCPU())
+		cur = m.emitPoint(ar, tail, now.Sub(start), eng, sampleCPU())
 	}
 	m.flushSamples(runID, samples)
+	// Final stats: Total now equals the final summary.
+	m.publishStats(ar, now.Sub(start), col.CumulativeSummary(), cur)
 
 	final := m.finalRun(ar, sc, metrics.Summarize(col.Cumulative()), runErr, peakCPU)
+	m.storeErrorGroups(runID, ar.groups)
 	m.updateRun(final)
 	ar.finish(final)
 	m.remove(runID)
+}
+
+// publishStats publishes one model.LiveStats: total is cumulative since
+// the start, current the last interval.
+func (m *Manager) publishStats(ar *activeRun, elapsed time.Duration, total, current metrics.Summary) {
+	ar.publishStats(&model.LiveStats{
+		Elapsed: elapsed.Seconds(),
+		Total:   liveSummary(total),
+		Current: liveSummary(current),
+		Errors:  ar.groups.Snapshot(),
+	})
+}
+
+// liveSummary is toModelSummary with ByStep always present.
+func liveSummary(s metrics.Summary) model.Summary {
+	out := toModelSummary(s)
+	if out.ByStep == nil {
+		out.ByStep = map[string]model.Summary{}
+	}
+	return out
+}
+
+// storeErrorGroups persists the run's final error groups (if any).
+func (m *Manager) storeErrorGroups(runID string, g *metrics.ErrorGrouper) {
+	groups := g.Snapshot()
+	if len(groups) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	if err := m.store.SetErrorGroups(ctx, runID, groups); err != nil {
+		m.log.Error("runner: store error groups", "run", runID, "count", len(groups), "err", err)
+	}
 }
 
 // finalRun builds the terminal run record.
@@ -155,13 +198,14 @@ func (m *Manager) finalRun(ar *activeRun, sc *scenario.Scenario, sum metrics.Sum
 
 // emitPoint converts one interval snapshot into a MetricPoint, stores it
 // with its encoded histograms and publishes it to subscribers.
-func (m *Manager) emitPoint(ar *activeRun, snap *metrics.Snapshot, elapsed time.Duration, eng *engine.Engine, cpu float64) {
+func (m *Manager) emitPoint(ar *activeRun, snap *metrics.Snapshot, elapsed time.Duration, eng *engine.Engine, cpu float64) metrics.Summary {
 	target, active := eng.Current()
-	m.emit(ar, snap, elapsed, target, active, cpu, 1)
+	return m.emit(ar, snap, elapsed, target, active, cpu, 1)
 }
 
-// emit stores and publishes one per-second point (local or merged remote).
-func (m *Manager) emit(ar *activeRun, snap *metrics.Snapshot, elapsed time.Duration, target float64, active int64, cpu float64, workers int) {
+// emit stores and publishes one per-second point (local or merged remote)
+// and returns the interval's summary.
+func (m *Manager) emit(ar *activeRun, snap *metrics.Snapshot, elapsed time.Duration, target float64, active int64, cpu float64, workers int) metrics.Summary {
 	sum := metrics.Summarize(snap)
 	p := model.MetricPoint{
 		T:          m.now(),
@@ -193,6 +237,7 @@ func (m *Manager) emit(ar *activeRun, snap *metrics.Snapshot, elapsed time.Durat
 	}
 	cancel()
 	ar.publish(Event{Type: EventMetric, Metric: &p})
+	return sum
 }
 
 // flushSamples persists error samples collected since the last call.

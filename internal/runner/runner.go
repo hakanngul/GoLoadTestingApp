@@ -30,7 +30,7 @@ const (
 )
 
 // Event is one live update for a run (sent as SSE `event: <Type>`,
-// `data: <json of Metric or Run>`).
+// `data: <json of Metric, Run or Stats>`).
 type Event struct {
 	Type   EventType
 	Metric *model.MetricPoint
@@ -49,6 +49,10 @@ type Runner interface {
 	// closed after EventDone or when cancel is called. For runs that are
 	// not active it returns ErrNotRunning (clients then read the store).
 	Subscribe(runID string) (events <-chan Event, cancel func(), err error)
+	// ErrorGroups returns the live error groups of an active run (every
+	// failure so far, most frequent first). For runs that are not active
+	// it returns ErrNotRunning (clients then read the store).
+	ErrorGroups(runID string) ([]model.ErrorGroup, error)
 	// Active lists IDs of runs in progress.
 	Active() []string
 	// Workers lists known workers (local pseudo-worker until Phase 4).
