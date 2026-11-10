@@ -38,6 +38,9 @@ type Config struct {
 	Retention time.Duration
 	// Scheduler serves /api/schedules. nil answers those routes with 503.
 	Scheduler Scheduler
+	// Suites serves /api/suites and /api/suite-runs. nil answers those
+	// routes with 503.
+	Suites Suites
 }
 
 // Limits on request bodies.
@@ -72,6 +75,7 @@ type server struct {
 	retention time.Duration
 	reporter  *report.Reporter
 	scheduler Scheduler
+	suites    Suites
 
 	// heartbeat is the SSE keep-alive interval (overridable in tests).
 	heartbeat time.Duration
@@ -105,6 +109,7 @@ func newServer(cfg Config) *server {
 		retention: cfg.Retention,
 		reporter:  report.New(cfg.Store),
 		scheduler: cfg.Scheduler,
+		suites:    cfg.Suites,
 		heartbeat: defaultHeartbeat,
 		trySem:    make(chan struct{}, maxConcurrentTries),
 		api:       http.NewServeMux(),
@@ -159,6 +164,18 @@ func (s *server) routes() {
 	m.HandleFunc("PUT /api/schedules/{id}", s.handleUpdateSchedule)
 	m.HandleFunc("DELETE /api/schedules/{id}", s.handleDeleteSchedule)
 	m.HandleFunc("POST /api/schedules/{id}/run-now", s.handleRunScheduleNow)
+
+	// Test suites.
+	m.HandleFunc("GET /api/suites", s.withSuites(s.handleListSuites))
+	m.HandleFunc("POST /api/suites", s.withSuites(s.handleCreateSuite))
+	m.HandleFunc("GET /api/suites/{id}", s.withSuites(s.handleGetSuite))
+	m.HandleFunc("PUT /api/suites/{id}", s.withSuites(s.handleUpdateSuite))
+	m.HandleFunc("DELETE /api/suites/{id}", s.withSuites(s.handleDeleteSuite))
+	m.HandleFunc("POST /api/suites/{id}/runs", s.withSuites(s.handleStartSuite))
+	m.HandleFunc("GET /api/suites/{id}/runs", s.withSuites(s.handleListSuiteRuns))
+	m.HandleFunc("GET /api/suite-runs", s.withSuites(s.handleListSuiteRuns))
+	m.HandleFunc("GET /api/suite-runs/{id}", s.withSuites(s.handleGetSuiteRun))
+	m.HandleFunc("POST /api/suite-runs/{id}/stop", s.withSuites(s.handleStopSuiteRun))
 }
 
 // handler assembles the middleware chain:

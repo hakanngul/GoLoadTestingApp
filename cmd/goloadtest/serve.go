@@ -27,6 +27,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scheduler"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
+	"github.com/hakanngul/GoLoadTestingApp/internal/suite"
 	"github.com/hakanngul/GoLoadTestingApp/web"
 )
 
@@ -157,6 +158,18 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		close(schedDone)
 	}
 
+	// Test suites run their tests through mgr too. Suite runs left active
+	// by a previous process are recorded as error (like runs above).
+	var suites *suite.Service
+	if ss, ok := st.(suite.Store); ok {
+		suites = suite.New(suite.Options{Store: ss, Runner: mgr, Logger: log})
+		if n, err := suites.Recover(ctx); err != nil {
+			log.Warn("recover suite runs", "error", err)
+		} else if n > 0 {
+			log.Info("marked interrupted suite runs as error", "count", n)
+		}
+	}
+
 	ui, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
 		fmt.Fprintf(stderr, "ui: %v\n", err)
@@ -168,6 +181,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 			Store: st, Runner: mgr, UI: ui, Version: version,
 			Logger: log, AuthToken: *token, DevCORS: *devCORS, Retention: retention,
 			Scheduler: schedulerOrNil(sched),
+			Suites:    suitesOrNil(suites),
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -196,6 +210,11 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	select {
 	case <-schedDone:
 	case <-shutdownCtx.Done():
+	}
+	if suites != nil {
+		if err := suites.Shutdown(shutdownCtx); err != nil {
+			log.Warn("stop active suite runs", "error", err)
+		}
 	}
 	if err := mgr.Shutdown(shutdownCtx); err != nil {
 		log.Warn("stop active runs", "error", err)
@@ -367,4 +386,13 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// suitesOrNil keeps a nil *suite.Service from becoming a non-nil
+// api.Suites interface value.
+func suitesOrNil(s *suite.Service) api.Suites {
+	if s == nil {
+		return nil
+	}
+	return s
 }

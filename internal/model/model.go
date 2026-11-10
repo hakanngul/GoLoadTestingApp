@@ -583,3 +583,102 @@ type SchedulePreview struct {
 	Errors []string    `json:"errors"`
 	Times  []time.Time `json:"times"`
 }
+
+// ---- Test suites ----
+
+// SuiteMode is how a suite runs its tests.
+type SuiteMode string
+
+const (
+	// SuiteSequential runs the tests one after another, in order.
+	SuiteSequential SuiteMode = "sequential"
+	// SuiteParallel starts every test at once.
+	SuiteParallel SuiteMode = "parallel"
+)
+
+// Suite item states (SuiteRunItem.Status). A started item takes the
+// status of its run (RunStatus values); the two below are suite-only.
+const (
+	SuiteItemPending = "pending" // not started yet
+	SuiteItemSkipped = "skipped" // never started (suite stopped or an earlier test failed)
+)
+
+// SuiteItem is one test case of a suite.
+type SuiteItem struct {
+	TestID string `json:"test_id"`
+	// TestName is filled on read; empty when the test has been deleted
+	// (the item is then skipped when the suite runs).
+	TestName string `json:"test_name"`
+	// Workers for this test's run (0 = 1, local).
+	Workers int `json:"workers"`
+}
+
+// Suite is an ordered group of saved tests that run together.
+type Suite struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Mode        SuiteMode `json:"mode"`
+	// StopOnFailure (sequential only): when a test fails or errors, the
+	// remaining tests are skipped.
+	StopOnFailure bool `json:"stop_on_failure"`
+	// GapMs (sequential only) is the pause between two tests.
+	GapMs     int64       `json:"gap_ms"`
+	Items     []SuiteItem `json:"items"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
+	// LastRun is filled by list endpoints.
+	LastRun *SuiteRun `json:"last_run,omitempty"`
+}
+
+// SuiteRequest is the body of POST /api/suites and PUT /api/suites/{id}.
+type SuiteRequest struct {
+	Name          string      `json:"name"`
+	Description   string      `json:"description"`
+	Mode          SuiteMode   `json:"mode"` // "" = sequential
+	StopOnFailure bool        `json:"stop_on_failure"`
+	GapMs         int64       `json:"gap_ms"`
+	Items         []SuiteItem `json:"items"` // TestID and Workers are read
+}
+
+// StartSuiteRequest is the body of POST /api/suites/{id}/runs.
+type StartSuiteRequest struct {
+	// Label is given to the suite run and to each test run it starts.
+	Label string `json:"label,omitempty"`
+}
+
+// SuiteRunItem is the state of one test case within a suite run.
+type SuiteRunItem struct {
+	TestID   string `json:"test_id"`
+	TestName string `json:"test_name"`
+	Workers  int    `json:"workers"`
+	// RunID is the run started for this item ("" until started, or if it
+	// could not start).
+	RunID string `json:"run_id,omitempty"`
+	// Status is pending, skipped or the run's status.
+	Status     string     `json:"status"`
+	Error      string     `json:"error,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	// Summary is copied from the run when it finishes (without by_step).
+	Summary *Summary `json:"summary,omitempty"`
+}
+
+// SuiteRun is one execution of a suite. Its Status is queued/running
+// while active, then passed (every test passed), failed (a test failed,
+// errored or was skipped after a failure), stopped (by the user) or error
+// (interrupted, e.g. by a server restart).
+type SuiteRun struct {
+	ID            string         `json:"id"`
+	SuiteID       string         `json:"suite_id"`
+	SuiteName     string         `json:"suite_name"`
+	Status        RunStatus      `json:"status"`
+	Mode          SuiteMode      `json:"mode"`
+	StopOnFailure bool           `json:"stop_on_failure"`
+	GapMs         int64          `json:"gap_ms"`
+	Label         string         `json:"label"`
+	StartedAt     time.Time      `json:"started_at"`
+	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
+	Items         []SuiteRunItem `json:"items"`
+	Error         string         `json:"error,omitempty"`
+}

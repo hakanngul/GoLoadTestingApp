@@ -25,6 +25,10 @@ func TestSQLiteQueryLiteralsMatchFragments(t *testing.T) {
 		{"GetSchedule", sqliteGetScheduleSQL, sqliteScheduleCols},
 		{"ListSchedules", sqliteListSchedulesSQL, sqliteScheduleCols},
 		{"ListTestSchedules", sqliteListTestSchedulesSQL, sqliteScheduleCols},
+		{"GetSuite", sqliteGetSuiteSQL, sqliteSuiteCols},
+		{"ListSuites", sqliteListSuitesSQL, sqliteSuiteCols},
+		{"GetSuiteRun", sqliteGetSuiteRunSQL, sqliteSuiteRunCols},
+		{"ListSuiteRuns", sqliteListSuiteRunsSQL, sqliteSuiteRunCols},
 	}
 	for _, c := range cases {
 		if !strings.Contains(norm(c.query), norm(c.fragment)) {

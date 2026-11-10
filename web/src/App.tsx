@@ -17,6 +17,9 @@ const ComparePage = lazy(() => import('./pages/ComparePage').then((m) => ({ defa
 const ReportsPage = lazy(() => import('./pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const TestReportPage = lazy(() => import('./pages/TestReportPage').then((m) => ({ default: m.TestReportPage })));
 const SchedulesPage = lazy(() => import('./pages/SchedulesPage').then((m) => ({ default: m.SchedulesPage })));
+const SuitesPage = lazy(() => import('./pages/SuitesPage').then((m) => ({ default: m.SuitesPage })));
+const SuitePage = lazy(() => import('./pages/SuitePage').then((m) => ({ default: m.SuitePage })));
+const SuiteRunPage = lazy(() => import('./pages/SuiteRunPage').then((m) => ({ default: m.SuiteRunPage })));
 const WorkersPage = lazy(() => import('./pages/WorkersPage').then((m) => ({ default: m.WorkersPage })));
 
 /**
@@ -62,6 +65,9 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             <NavLink to="/" end className={({ isActive }) => (isActive || loc.pathname.startsWith('/tests') ? 'active' : '')}>
               <Icon name="tests" /> Tests
             </NavLink>
+            <NavLink to="/suites" className={({ isActive }) => (isActive || loc.pathname.startsWith('/suite-runs') ? 'active' : '')}>
+              <Icon name="suite" /> Suites
+            </NavLink>
             <NavLink to="/runs">
               <Icon name="runs" /> Runs
             </NavLink>
@@ -103,6 +109,9 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             <Route path="/tests/:id" element={<TestEditorPage />} />
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/runs/:id" element={<RunPage />} />
+            <Route path="/suites" element={<SuitesPage />} />
+            <Route path="/suites/:id" element={<SuitePage />} />
+            <Route path="/suite-runs/:id" element={<SuiteRunPage />} />
             <Route path="/schedules" element={<SchedulesPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/reports/tests/:id" element={<TestReportPage />} />

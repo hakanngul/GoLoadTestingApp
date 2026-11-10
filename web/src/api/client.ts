@@ -14,6 +14,10 @@ import type {
   SchedulePreviewRequest,
   ScheduleRequest,
   StartRunRequest,
+  StartSuiteRequest,
+  Suite,
+  SuiteRequest,
+  SuiteRun,
   Test,
   TrendPoint,
   UpdateRunRequest,
@@ -213,6 +217,18 @@ export const api = {
   deleteSchedule: (id: string) => request<void>('DELETE', `/api/schedules/${enc(id)}`),
   runScheduleNow: (id: string) => request<Run>('POST', `/api/schedules/${enc(id)}/run-now`),
   previewSchedule: (req: SchedulePreviewRequest) => request<SchedulePreview>('POST', '/api/schedules/preview', req),
+
+  // ---------- test suites ----------
+  listSuites: () => request<Suite[] | null>('GET', '/api/suites').then((r) => r ?? []),
+  getSuite: (id: string) => request<Suite>('GET', `/api/suites/${enc(id)}`),
+  createSuite: (req: SuiteRequest) => request<Suite>('POST', '/api/suites', req),
+  updateSuite: (id: string, req: SuiteRequest) => request<Suite>('PUT', `/api/suites/${enc(id)}`, req),
+  deleteSuite: (id: string) => request<void>('DELETE', `/api/suites/${enc(id)}`),
+  startSuite: (id: string, req: StartSuiteRequest = {}) => request<SuiteRun>('POST', `/api/suites/${enc(id)}/runs`, req),
+  listSuiteRuns: (suiteId: string, limit = 50) =>
+    request<SuiteRun[] | null>('GET', `/api/suites/${enc(suiteId)}/runs?limit=${limit}`).then((r) => r ?? []),
+  getSuiteRun: (id: string) => request<SuiteRun>('GET', `/api/suite-runs/${enc(id)}`),
+  stopSuiteRun: (id: string) => request<void>('POST', `/api/suite-runs/${enc(id)}/stop`),
 };
 
 // ---------- downloads ----------

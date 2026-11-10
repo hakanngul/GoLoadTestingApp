@@ -77,7 +77,21 @@
 //	                                         -> model.SchedulePreview (always 200; next count fire times,
 //	                                         default 5, max 50, or errors)
 //
-//	GET    /*                                embedded UI (web/dist), SPA fallback to index.html
+//	GET    /api/suites                       -> []model.Suite (name order; item test_name filled, "" =
+//	                                         deleted test; last_run filled)
+//	POST   /api/suites                       model.SuiteRequest -> 201 model.Suite (400 invalid suite,
+//	                                         409 duplicate name)
+//	GET    /api/suites/{id}                  -> model.Suite
+//	PUT    /api/suites/{id}                  model.SuiteRequest -> model.Suite
+//	DELETE /api/suites/{id}                  -> 204 (deletes its suite runs; 409 while running)
+//	POST   /api/suites/{id}/runs             model.StartSuiteRequest (optional) -> 201 model.SuiteRun
+//	                                         (409 already running)
+//	GET    /api/suites/{id}/runs?limit=      -> []model.SuiteRun (newest first)
+//	GET    /api/suite-runs?suite_id=&limit=  -> []model.SuiteRun (newest first)
+//	GET    /api/suite-runs/{id}              -> model.SuiteRun (poll while running)
+//	POST   /api/suite-runs/{id}/stop         -> 202 (409 not active)
+//
+//	GET    /*                              embedded UI (web/dist), SPA fallback to index.html
 //
 // Scenario validation for POST/PUT/validate uses scenario.Parse; the data
 // file referenced by `data.file` need not be uploaded yet at save time,

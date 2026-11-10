@@ -458,3 +458,75 @@ export interface SchedulePreview {
   errors: string[];
   times: string[];
 }
+
+// ---------- test suites ----------
+
+export type SuiteMode = 'sequential' | 'parallel';
+
+/** Item status: pending, skipped or the run's status. */
+export type SuiteItemStatus = 'pending' | 'skipped' | RunStatus;
+
+export interface SuiteItem {
+  test_id: string;
+  /** Empty when the test has been deleted (the item is skipped). */
+  test_name: string;
+  /** 0 = 1 (local). */
+  workers: number;
+}
+
+export interface Suite {
+  id: string;
+  name: string;
+  description: string;
+  mode: SuiteMode;
+  /** Sequential only: a test that does not pass skips the rest. */
+  stop_on_failure: boolean;
+  /** Sequential only: pause between two tests. */
+  gap_ms: number;
+  items: SuiteItem[];
+  created_at: string;
+  updated_at: string;
+  /** Filled by GET /api/suites. */
+  last_run?: SuiteRun;
+}
+
+export interface SuiteRequest {
+  name: string;
+  description: string;
+  mode: SuiteMode;
+  stop_on_failure: boolean;
+  gap_ms: number;
+  items: { test_id: string; workers: number }[];
+}
+
+export interface StartSuiteRequest {
+  label?: string;
+}
+
+export interface SuiteRunItem {
+  test_id: string;
+  test_name: string;
+  workers: number;
+  run_id?: string;
+  status: SuiteItemStatus;
+  error?: string;
+  started_at?: string;
+  finished_at?: string;
+  /** Copied from the run when it finishes (no by_step). */
+  summary?: Summary;
+}
+
+export interface SuiteRun {
+  id: string;
+  suite_id: string;
+  suite_name: string;
+  status: RunStatus;
+  mode: SuiteMode;
+  stop_on_failure: boolean;
+  gap_ms: number;
+  label: string;
+  started_at: string;
+  finished_at?: string;
+  items: SuiteRunItem[];
+  error?: string;
+}
