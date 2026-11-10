@@ -16,6 +16,9 @@ type Test struct {
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	LastRun   *Run       `json:"last_run,omitempty"` // filled by ListTests only (Summary may be nil)
+	// BaselineRunID is the reference run new runs are compared against
+	// (empty = none). Cleared when that run is deleted.
+	BaselineRunID string `json:"baseline_run_id,omitempty"`
 }
 
 // FileInfo describes a data file attached to a test. Scenario `data.file`
@@ -57,6 +60,8 @@ type Run struct {
 	PeakCPU    float64           `json:"peak_cpu"` // 0..1, highest load-generator CPU seen
 	Warnings   []string          `json:"warnings"` // e.g. high CPU, missing worker
 	Error      string            `json:"error,omitempty"`
+	Label      string            `json:"label"` // short tag, e.g. "v1.4.2" (<= 100 chars)
+	Notes      string            `json:"notes"` // free text (<= 10k chars)
 }
 
 // Summary is an aggregate over a time window (whole run or one step).
@@ -134,7 +139,125 @@ type ValidateResult struct {
 
 // StartRunRequest is the body of POST /api/tests/{id}/runs.
 type StartRunRequest struct {
-	Workers int `json:"workers"` // 0 => 1 (local)
+	Workers int    `json:"workers"` // 0 => 1 (local)
+	Label   string `json:"label,omitempty"`
+	Notes   string `json:"notes,omitempty"`
+}
+
+// UpdateRunRequest is the body of PATCH /api/runs/{id}; nil = unchanged.
+type UpdateRunRequest struct {
+	Label *string `json:"label,omitempty"`
+	Notes *string `json:"notes,omitempty"`
+}
+
+// ---- Reporting ----
+
+// WindowKind selects the part of a run a report aggregates.
+type WindowKind string
+
+const (
+	WindowFull   WindowKind = "full"   // whole run
+	WindowSteady WindowKind = "steady" // without the initial ramp-up and a final ramp-down (from the scenario stages)
+	WindowCustom WindowKind = "custom" // [From, To) seconds since run start
+)
+
+// Window is a resolved time range of a run, in seconds since start.
+type Window struct {
+	Kind WindowKind `json:"kind"`
+	From float64    `json:"from"`
+	To   float64    `json:"to"`
+}
+
+// RunReport is a run aggregated exactly (merged HDR histograms, never
+// averaged percentiles) over a window. GET /api/runs/{id}/report.
+type RunReport struct {
+	Run        Run               `json:"run"`
+	Window     Window            `json:"window"`
+	Summary    Summary           `json:"summary"`            // over Window (incl. by_step)
+	Thresholds []ThresholdResult `json:"thresholds"`         // re-evaluated over Window
+	Baseline   *Comparison       `json:"baseline,omitempty"` // vs the test's baseline run, same window kind
+}
+
+// Verdict classifies a metric change between a reference and a candidate.
+type Verdict string
+
+const (
+	VerdictBetter Verdict = "better"
+	VerdictSame   Verdict = "same"  // within tolerance
+	VerdictWorse  Verdict = "worse" // regression
+	VerdictNA     Verdict = "n/a"   // not comparable (e.g. zero reference)
+)
+
+// MetricDelta is one metric of a comparison. Delta is relative
+// ((cand-ref)/ref) except for error_rate where it is absolute
+// (percentage points as a fraction).
+type MetricDelta struct {
+	Metric    string  `json:"metric"` // p50_ms p90_ms p95_ms p99_ms max_ms mean_ms rps error_rate
+	Reference float64 `json:"reference"`
+	Candidate float64 `json:"candidate"`
+	Delta     float64 `json:"delta"`
+	Verdict   Verdict `json:"verdict"`
+}
+
+// Comparison compares a candidate run with a reference run.
+type Comparison struct {
+	ReferenceRunID string        `json:"reference_run_id"`
+	CandidateRunID string        `json:"candidate_run_id"`
+	Tolerance      float64       `json:"tolerance"` // relative, default 0.10; error_rate uses tolerance/10 absolute
+	Metrics        []MetricDelta `json:"metrics"`
+	Regression     bool          `json:"regression"` // any metric worse
+	// ByStep compares steps present in both runs (same metrics).
+	ByStep map[string][]MetricDelta `json:"by_step,omitempty"`
+}
+
+// CompareResult is GET /api/compare?runs=a,b,c&window=...&tolerance=...
+// Runs[0] is the reference; Comparisons[i] compares Runs[i+1] to it.
+type CompareResult struct {
+	Runs        []RunReport  `json:"runs"`
+	Comparisons []Comparison `json:"comparisons"`
+}
+
+// TrendPoint is one finished run of a test, aggregated over a window.
+// GET /api/tests/{id}/trend?limit=&window= (oldest first).
+type TrendPoint struct {
+	RunID      string    `json:"run_id"`
+	StartedAt  time.Time `json:"started_at"`
+	Label      string    `json:"label"`
+	Status     RunStatus `json:"status"`
+	Workers    int       `json:"workers"`
+	Summary    Summary   `json:"summary"` // without by_step
+	IsBaseline bool      `json:"is_baseline"`
+}
+
+// Overview is GET /api/reports/overview: the reporting dashboard.
+type Overview struct {
+	Since      time.Time    `json:"since"` // ?days= window start (default 30 days)
+	Runs       int          `json:"runs"`
+	Passed     int          `json:"passed"`
+	Failed     int          `json:"failed"`
+	Errored    int          `json:"errored"` // error + stopped
+	Requests   int64        `json:"requests"`
+	Tests      []TestHealth `json:"tests"`
+	RecentRuns []Run        `json:"recent_runs"` // newest first, max 10, summaries without by_step
+	RunsPerDay []DayCount   `json:"runs_per_day"`
+}
+
+// TestHealth is one row of the overview: a test's latest run vs baseline.
+type TestHealth struct {
+	TestID    string      `json:"test_id"`
+	TestName  string      `json:"test_name"`
+	LatestRun *Run        `json:"latest_run,omitempty"`
+	Baseline  *Comparison `json:"baseline,omitempty"` // latest vs baseline (steady window)
+	PassRate  float64     `json:"pass_rate"`          // passed / finished runs in the period
+	RunCount  int         `json:"run_count"`
+}
+
+// DayCount is runs started on one UTC day, by outcome.
+type DayCount struct {
+	Day    string `json:"day"` // YYYY-MM-DD
+	Passed int    `json:"passed"`
+	Failed int    `json:"failed"`
+	Other  int    `json:"other"`
 }
 
 // APIError is the body of every non-2xx response.

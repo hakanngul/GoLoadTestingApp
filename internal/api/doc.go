@@ -26,6 +26,19 @@
 //
 //	GET    /api/workers                      -> []model.Worker
 //
+//	Reporting (window = full|steady|custom; custom needs from=&to= seconds;
+//	default steady; tolerance default 0.10):
+//	PATCH  /api/runs/{id}                    model.UpdateRunRequest -> model.Run
+//	DELETE /api/runs/{id}                    -> 204 (409 while active)
+//	GET    /api/runs/{id}/report?window=&from=&to=  -> model.RunReport
+//	GET    /api/runs/{id}/report.html?window=...    self-contained printable HTML report (download)
+//	GET    /api/runs/{id}/export.csv         per-second metric points (CSV)
+//	GET    /api/runs/{id}/export.json        {run, metrics, errors} (JSON download)
+//	GET    /api/compare?runs=a,b[,..6]&window=&tolerance=  -> model.CompareResult
+//	GET    /api/tests/{id}/trend?limit=30&window=   -> []model.TrendPoint (oldest first, finished runs)
+//	PUT    /api/tests/{id}/baseline          {"run_id": "..."} (or "" to clear) -> model.Test
+//	GET    /api/reports/overview?days=30     -> model.Overview
+//
 //	GET    /*                                embedded UI (web/dist), SPA fallback to index.html
 //
 // Scenario validation for POST/PUT/validate uses scenario.Parse; the data
