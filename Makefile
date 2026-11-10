@@ -2,11 +2,14 @@ BIN     := bin/goloadtest
 PKG     := ./...
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: all build run test fmt vet tidy clean
+.PHONY: all build ui run test fmt vet tidy clean
 
 all: fmt vet test build
 
-build:
+ui:
+	cd web && pnpm install --frozen-lockfile && pnpm build
+
+build: ui
 	go build -ldflags "-X main.version=$(VERSION)" -o $(BIN) ./cmd/goloadtest
 
 run:
@@ -25,7 +28,7 @@ tidy:
 	go mod tidy
 
 clean:
-	rm -rf bin
+	rm -rf bin web/dist
 
 # Regenerate gRPC code. Needs protoc + protoc-gen-go + protoc-gen-go-grpc on PATH.
 .PHONY: proto
