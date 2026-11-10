@@ -1,0 +1,17 @@
+# Binaries
+bin/
+*.exe
+*.test
+*.out
+
+# Coverage / profiling
+coverage.*
+*.prof
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Env
+.env
