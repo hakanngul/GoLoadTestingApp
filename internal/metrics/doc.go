@@ -30,4 +30,15 @@
 //
 //	type ThresholdResult struct { Threshold scenario.Threshold; Actual float64; Passed bool }
 //	func EvaluateThresholds(sum Summary, th []scenario.Threshold) ([]ThresholdResult, error)
+//
+// Additions beyond the planned API:
+//
+//	const LowestLatencyMicros, HighestLatencyMicros, SignificantFigures  // histogram geometry
+//	func (s *Stats) Clone() *Stats
+//	func (s *Snapshot) Clone() *Snapshot
+//	func (s *Snapshot) MarshalBinary() ([]byte, error)   // gob + HdrHistogram V2 compressed
+//	func (s *Snapshot) UnmarshalBinary(data []byte) error
+//
+// Latencies below 1us (including 0) are recorded as 1us; latencies above
+// 60s are clamped to 60s and still counted.
 package metrics
