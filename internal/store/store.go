@@ -7,6 +7,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 )
@@ -36,8 +37,19 @@ type Store interface {
 	GetFile(ctx context.Context, testID, name string) ([]byte, error)
 	DeleteFile(ctx context.Context, testID, name string) error
 
+	// CreateRun stores a new run, including Label and Notes.
 	CreateRun(ctx context.Context, r model.Run) (model.Run, error)
-	UpdateRun(ctx context.Context, r model.Run) error // full replace except ID/TestID
+	// UpdateRun replaces every field except ID, TestID, Label and Notes.
+	// Label/Notes are user metadata owned by CreateRun and UpdateRunMeta,
+	// so the runner's status updates never clobber a PATCH made while the
+	// run is active.
+	UpdateRun(ctx context.Context, r model.Run) error
+	// UpdateRunMeta sets the run's label and/or notes (nil = unchanged)
+	// and returns the updated run.
+	UpdateRunMeta(ctx context.Context, id string, label, notes *string) (model.Run, error)
+	// DeleteRun removes a run with its metrics and error samples; a test
+	// whose baseline it was has its BaselineRunID cleared.
+	DeleteRun(ctx context.Context, id string) error
 	GetRun(ctx context.Context, id string) (model.Run, error)
 	ListRuns(ctx context.Context, f RunFilter) ([]model.Run, error) // newest first
 	// MarkInterrupted sets every queued/running run to error with msg
@@ -49,6 +61,17 @@ type Store interface {
 	AppendMetric(ctx context.Context, runID string, p model.MetricPoint, snapshot []byte) error
 	ListMetrics(ctx context.Context, runID string) ([]model.MetricPoint, error) // ordered by T
 	ListSnapshots(ctx context.Context, runID string) ([][]byte, error)
+	// ListMetricsWithSnapshots returns points and snapshots aligned by
+	// index (ordered by T; a missing snapshot is an empty slice).
+	ListMetricsWithSnapshots(ctx context.Context, runID string) ([]model.MetricPoint, [][]byte, error)
+
+	// SetBaseline sets (runID != "") or clears (runID == "") the test's
+	// baseline run and returns the test. Unknown test or run: ErrNotFound;
+	// a run of another test: ErrConflict. UpdatedAt is not changed.
+	SetBaseline(ctx context.Context, testID, runID string) (model.Test, error)
+	// RunsSince returns runs started at or after since, newest first.
+	// To keep the overview cheap, summaries are returned WITHOUT by_step.
+	RunsSince(ctx context.Context, since time.Time) ([]model.Run, error)
 
 	AppendErrorSamples(ctx context.Context, runID string, s []model.ErrorSample) error
 	ListErrorSamples(ctx context.Context, runID string) ([]model.ErrorSample, error)

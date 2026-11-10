@@ -228,10 +228,58 @@ func (f *fakeStore) ListErrorSamples(_ context.Context, runID string) ([]model.E
 
 func (f *fakeStore) Close() {}
 
+func (f *fakeStore) UpdateRunMeta(_ context.Context, id string, label, notes *string) (model.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.runs[id]
+	if !ok {
+		return model.Run{}, store.ErrNotFound
+	}
+	if label != nil {
+		r.Label = *label
+	}
+	if notes != nil {
+		r.Notes = *notes
+	}
+	f.runs[id] = r
+	return r, nil
+}
+
+func (f *fakeStore) DeleteRun(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.runs[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(f.runs, id)
+	return nil
+}
+
+func (f *fakeStore) ListMetricsWithSnapshots(_ context.Context, runID string) ([]model.MetricPoint, [][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	pts := f.metrics[runID]
+	return pts, make([][]byte, len(pts)), nil
+}
+
+func (f *fakeStore) SetBaseline(_ context.Context, testID, runID string) (model.Test, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t, ok := f.tests[testID]
+	if !ok {
+		return model.Test{}, store.ErrNotFound
+	}
+	t.BaselineRunID = runID
+	f.tests[testID] = t
+	return f.withFiles(t), nil
+}
+
+func (f *fakeStore) RunsSince(context.Context, time.Time) ([]model.Run, error) { return nil, nil }
+
 // fakeRunner is a scriptable runner.Runner.
 type fakeRunner struct {
 	mu       sync.Mutex
-	store    *fakeStore
+	store    store.Store
 	startErr error
 	stopErr  error
 	active   map[string]bool
@@ -245,7 +293,7 @@ type fakeRunner struct {
 
 var _ runner.Runner = (*fakeRunner)(nil)
 
-func newFakeRunner(s *fakeStore) *fakeRunner {
+func newFakeRunner(s store.Store) *fakeRunner {
 	return &fakeRunner{
 		store:     s,
 		active:    map[string]bool{},
@@ -264,7 +312,7 @@ func (r *fakeRunner) Start(ctx context.Context, t model.Test, req model.StartRun
 	}
 	run, err := r.store.CreateRun(ctx, model.Run{
 		TestID: t.ID, TestName: t.Name, Status: model.RunRunning, YAML: t.YAML,
-		Workers: max(req.Workers, 1), StartedAt: time.Now(),
+		Workers: max(req.Workers, 1), StartedAt: time.Now(), Label: req.Label, Notes: req.Notes,
 	})
 	if err != nil {
 		return model.Run{}, err

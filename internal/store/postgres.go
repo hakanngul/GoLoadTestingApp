@@ -199,11 +199,18 @@ const filesExpr = `COALESCE((SELECT json_agg(json_build_object('name', f.name, '
 // with alias.
 func runCols(alias string) string {
 	cols := []string{"id::text", "test_id::text", "test_name", "status", "yaml", "workers",
-		"started_at", "finished_at", "summary", "thresholds", "peak_cpu", "warnings", "error"}
+		"started_at", "finished_at", "summary", "thresholds", "peak_cpu", "warnings", "error",
+		"label", "notes"}
 	for i, c := range cols {
 		cols[i] = alias + "." + c
 	}
 	return strings.Join(cols, ", ")
+}
+
+// runColsSlim is runCols with the summary's by_step removed (RunsSince).
+func runColsSlim(alias string) string {
+	return strings.Replace(runCols(alias), alias+".summary,",
+		"CASE WHEN jsonb_typeof("+alias+".summary) = 'object' THEN "+alias+".summary - 'by_step' ELSE "+alias+".summary END,", 1)
 }
 
 // runRow receives one runs row. Every field is nullable so the same type
@@ -215,11 +222,13 @@ type runRow struct {
 	summary, thresholds, warnings      []byte
 	peakCPU                            *float64
 	errText                            *string
+	label, notes                       *string
 }
 
 func (r *runRow) dest() []any {
 	return []any{&r.id, &r.testID, &r.testName, &r.status, &r.yaml, &r.workers,
-		&r.startedAt, &r.finishedAt, &r.summary, &r.thresholds, &r.peakCPU, &r.warnings, &r.errText}
+		&r.startedAt, &r.finishedAt, &r.summary, &r.thresholds, &r.peakCPU, &r.warnings, &r.errText,
+		&r.label, &r.notes}
 }
 
 // run converts a scanned row; ok is false when the row was all NULL.
@@ -236,6 +245,8 @@ func (r *runRow) run() (model.Run, bool, error) {
 		Workers:    int(deref(r.workers)),
 		PeakCPU:    deref(r.peakCPU),
 		Error:      deref(r.errText),
+		Label:      deref(r.label),
+		Notes:      deref(r.notes),
 		Thresholds: []model.ThresholdResult{},
 		Warnings:   []string{},
 	}
@@ -280,10 +291,14 @@ func deref[T any](p *T) T {
 	return *p
 }
 
+// testCols selects the columns testDest scans, for alias t.
+const testCols = `t.id::text, t.name, t.yaml, t.created_at, t.updated_at,
+	COALESCE(t.baseline_run_id::text, ''), ` + filesExpr
+
 // testDest returns scan targets for id, name, yaml, created_at,
-// updated_at and the files JSON.
+// updated_at, baseline_run_id and the files JSON.
 func testDest(t *model.Test, files *[]byte) []any {
-	return []any{&t.ID, &t.Name, &t.YAML, &t.CreatedAt, &t.UpdatedAt, files}
+	return []any{&t.ID, &t.Name, &t.YAML, &t.CreatedAt, &t.UpdatedAt, &t.BaselineRunID, files}
 }
 
 func finishTest(t *model.Test, files []byte) error {
@@ -303,7 +318,7 @@ func finishTest(t *model.Test, files []byte) error {
 // files and newest run, in a single query.
 func (p *Postgres) ListTests(ctx context.Context) ([]model.Test, error) {
 	rows, err := p.pool.Query(ctx, `
-		SELECT t.id::text, t.name, t.yaml, t.created_at, t.updated_at, `+filesExpr+`, `+runCols("lr")+`
+		SELECT `+testCols+`, `+runCols("lr")+`
 		FROM tests t
 		LEFT JOIN LATERAL (
 			SELECT * FROM runs r WHERE r.test_id = t.id
@@ -359,7 +374,7 @@ func (p *Postgres) getTest(ctx context.Context, q querier, id string) (model.Tes
 		t     model.Test
 		files []byte
 	)
-	err := q.QueryRow(ctx, `SELECT t.id::text, t.name, t.yaml, t.created_at, t.updated_at, `+filesExpr+`
+	err := q.QueryRow(ctx, `SELECT `+testCols+`
 		FROM tests t WHERE t.id = $1`, id).Scan(testDest(&t, &files)...)
 	if err != nil {
 		return model.Test{}, mapErr(err)
@@ -524,16 +539,16 @@ func (p *Postgres) CreateRun(ctx context.Context, r model.Run) (model.Run, error
 		return model.Run{}, err
 	}
 	id := newID()
-	// $1 id, $2 test_id, $3.. = runArgs; $14 = now.
+	// $1 id, $2 test_id, $3.. = runArgs; $14 = now; $15 label; $16 notes.
 	row := p.pool.QueryRow(ctx, `
 		INSERT INTO runs (id, test_id, test_name, status, yaml, workers, started_at, finished_at,
-		                  summary, thresholds, peak_cpu, warnings, error)
+		                  summary, thresholds, peak_cpu, warnings, error, label, notes)
 		SELECT $1::uuid, t.id, COALESCE(NULLIF($3::text, ''), t.name), COALESCE(NULLIF($4::text, ''), 'queued'),
 		       $5::text, $6::integer, COALESCE($7::timestamptz, $14::timestamptz), $8::timestamptz,
-		       $9::jsonb, $10::jsonb, $11::double precision, $12::jsonb, $13::text
+		       $9::jsonb, $10::jsonb, $11::double precision, $12::jsonb, $13::text, $15::text, $16::text
 		FROM tests t WHERE t.id = $2::uuid
 		RETURNING `+runCols("runs"),
-		append([]any{id, r.TestID}, append(args, now())...)...)
+		append([]any{id, r.TestID}, append(args, now(), r.Label, r.Notes)...)...)
 	var rr runRow
 	if err := row.Scan(rr.dest()...); err != nil {
 		return model.Run{}, mapErr(err)
@@ -542,8 +557,8 @@ func (p *Postgres) CreateRun(ctx context.Context, r model.Run) (model.Run, error
 	return out, err
 }
 
-// UpdateRun replaces every field of an existing run except ID and TestID.
-// A zero StartedAt keeps the stored value.
+// UpdateRun replaces every field of an existing run except ID, TestID,
+// Label and Notes. A zero StartedAt keeps the stored value.
 func (p *Postgres) UpdateRun(ctx context.Context, r model.Run) error {
 	if !isUUID(r.ID) {
 		return ErrNotFound
@@ -759,6 +774,141 @@ func (p *Postgres) ListErrorSamples(ctx context.Context, runID string) ([]model.
 		e.T = e.T.UTC()
 		e.Status = int(status)
 		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapErr(err)
+	}
+	return out, nil
+}
+
+// UpdateRunMeta sets label and/or notes (nil = unchanged).
+func (p *Postgres) UpdateRunMeta(ctx context.Context, id string, label, notes *string) (model.Run, error) {
+	if !isUUID(id) {
+		return model.Run{}, ErrNotFound
+	}
+	var rr runRow
+	err := p.pool.QueryRow(ctx, `UPDATE runs SET label = COALESCE($2::text, label), notes = COALESCE($3::text, notes)
+		WHERE id = $1 RETURNING `+runCols("runs"), id, label, notes).Scan(rr.dest()...)
+	if err != nil {
+		return model.Run{}, mapErr(err)
+	}
+	out, _, err := rr.run()
+	return out, err
+}
+
+// DeleteRun removes a run; metrics and error samples cascade and a test
+// baseline pointing at it is set to NULL by the foreign key.
+func (p *Postgres) DeleteRun(ctx context.Context, id string) error {
+	if !isUUID(id) {
+		return ErrNotFound
+	}
+	tag, err := p.pool.Exec(ctx, `DELETE FROM runs WHERE id = $1`, id)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListMetricsWithSnapshots returns a run's points and snapshots, aligned.
+func (p *Postgres) ListMetricsWithSnapshots(ctx context.Context, runID string) ([]model.MetricPoint, [][]byte, error) {
+	pts, snaps := []model.MetricPoint{}, [][]byte{}
+	if !isUUID(runID) {
+		return pts, snaps, nil
+	}
+	rows, err := p.pool.Query(ctx, `SELECT t, point, COALESCE(snapshot, ''::bytea) FROM run_metrics
+		WHERE run_id = $1 ORDER BY t`, runID)
+	if err != nil {
+		return nil, nil, mapErr(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			t  time.Time
+			pj []byte
+			b  []byte
+			pt model.MetricPoint
+		)
+		if err := rows.Scan(&t, &pj, &b); err != nil {
+			return nil, nil, mapErr(err)
+		}
+		if err := json.Unmarshal(pj, &pt); err != nil {
+			return nil, nil, fmt.Errorf("store: decode metric point: %w", err)
+		}
+		pt.T = t.UTC()
+		if b == nil {
+			b = []byte{}
+		}
+		pts = append(pts, pt)
+		snaps = append(snaps, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, mapErr(err)
+	}
+	return pts, snaps, nil
+}
+
+// SetBaseline sets or clears a test's baseline run.
+func (p *Postgres) SetBaseline(ctx context.Context, testID, runID string) (model.Test, error) {
+	if !isUUID(testID) {
+		return model.Test{}, ErrNotFound
+	}
+	if runID != "" && !isUUID(runID) {
+		return model.Test{}, ErrNotFound
+	}
+	var out model.Test
+	err := pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
+		// Lock the test row so a concurrent delete cannot interleave.
+		var tid string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM tests WHERE id = $1 FOR UPDATE`, testID).Scan(&tid); err != nil {
+			return mapErr(err)
+		}
+		var baseline *string
+		if runID != "" {
+			var owner string
+			if err := tx.QueryRow(ctx, `SELECT test_id::text FROM runs WHERE id = $1`, runID).Scan(&owner); err != nil {
+				return mapErr(err)
+			}
+			if owner != testID {
+				return fmt.Errorf("%w: run belongs to another test", ErrConflict)
+			}
+			baseline = &runID
+		}
+		if _, err := tx.Exec(ctx, `UPDATE tests SET baseline_run_id = $2::uuid WHERE id = $1`, testID, baseline); err != nil {
+			return mapErr(err)
+		}
+		var err error
+		out, err = p.getTest(ctx, tx, testID)
+		return err
+	})
+	if err != nil {
+		return model.Test{}, err
+	}
+	return out, nil
+}
+
+// RunsSince returns runs started at or after since, newest first, with
+// summaries stripped of by_step.
+func (p *Postgres) RunsSince(ctx context.Context, since time.Time) ([]model.Run, error) {
+	rows, err := p.pool.Query(ctx, `SELECT `+runColsSlim("r")+` FROM runs r WHERE r.started_at >= $1
+		ORDER BY r.started_at DESC, r.id DESC`, normTime(since))
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer rows.Close()
+	out := []model.Run{}
+	for rows.Next() {
+		var rr runRow
+		if err := rows.Scan(rr.dest()...); err != nil {
+			return nil, mapErr(err)
+		}
+		r, _, err := rr.run()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, mapErr(err)

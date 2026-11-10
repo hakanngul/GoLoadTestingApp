@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
 	"github.com/hakanngul/GoLoadTestingApp/internal/data"
@@ -68,6 +69,29 @@ func newValidationError(err error) *ValidationError {
 		details = []string{err.Error()}
 	}
 	return &ValidationError{Details: details}
+}
+
+// Limits on run metadata (StartRunRequest / UpdateRunRequest), in
+// characters (runes).
+const (
+	MaxLabelLen = 100
+	MaxNotesLen = 10000
+)
+
+// ValidateRunMeta checks label and notes against MaxLabelLen and
+// MaxNotesLen, returning a *ValidationError when either is too long.
+func ValidateRunMeta(label, notes string) error {
+	var details []string
+	if utf8.RuneCountInString(label) > MaxLabelLen {
+		details = append(details, fmt.Sprintf("label: must be at most %d characters", MaxLabelLen))
+	}
+	if utf8.RuneCountInString(notes) > MaxNotesLen {
+		details = append(details, fmt.Sprintf("notes: must be at most %d characters", MaxNotesLen))
+	}
+	if len(details) > 0 {
+		return &ValidationError{Details: details}
+	}
+	return nil
 }
 
 // Options configures a Manager.
@@ -202,6 +226,10 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 			}
 		}
 	}
+	label := strings.TrimSpace(req.Label)
+	if err := ValidateRunMeta(label, req.Notes); err != nil {
+		return model.Run{}, err
+	}
 	workers := req.Workers
 	switch {
 	case workers < 0:
@@ -246,6 +274,8 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 		StartedAt:  m.now(),
 		Thresholds: []model.ThresholdResult{},
 		Warnings:   []string{},
+		Label:      label,
+		Notes:      req.Notes,
 	})
 	if err != nil {
 		if plan == nil {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
@@ -18,6 +19,11 @@ func (s *server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Workers < 0 {
 		s.writeErr(w, r, badRequest("workers must not be negative"))
+		return
+	}
+	req.Label = strings.TrimSpace(req.Label)
+	if err := checkRunMeta(&req.Label, &req.Notes); err != nil {
+		s.writeErr(w, r, err)
 		return
 	}
 	t, err := s.store.GetTest(r.Context(), r.PathValue("id"))

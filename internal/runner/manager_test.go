@@ -304,6 +304,12 @@ func TestStartRejections(t *testing.T) {
 			name: "negative workers", yaml: valid, req: model.StartRunRequest{Workers: -1}, details: "workers",
 		},
 		{
+			name: "label too long", yaml: valid, req: model.StartRunRequest{Label: strings.Repeat("é", MaxLabelLen+1)}, details: "label",
+		},
+		{
+			name: "notes too long", yaml: valid, req: model.StartRunRequest{Notes: strings.Repeat("x", MaxNotesLen+1)}, details: "notes",
+		},
+		{
 			name: "distributed", yaml: valid, req: model.StartRunRequest{Workers: 3},
 			check: func(err error) bool { return errors.Is(err, ErrDistributedUnavailable) },
 		},
@@ -346,6 +352,26 @@ func TestStartRejections(t *testing.T) {
 				t.Fatalf("%d runs created, want 0", n)
 			}
 		})
+	}
+}
+
+func TestLabelAndNotesPersisted(t *testing.T) {
+	t.Parallel()
+	st := newFakeStore()
+	m := newManager(t, st, nil)
+	srv := target(t, http.StatusOK)
+	notes := strings.Repeat("n", MaxNotesLen)
+	run, err := m.Start(context.Background(), testFor(scenarioYAML(srv.URL, "1s", 5, "/", "")),
+		model.StartRunRequest{Label: "  v1.4.2 ", Notes: notes})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if run.Label != "v1.4.2" || run.Notes != notes {
+		t.Fatalf("Start label/notes = %q / %d chars", run.Label, len(run.Notes))
+	}
+	fin := waitFinished(t, st, run.ID, 10*time.Second)
+	if fin.Label != "v1.4.2" || fin.Notes != notes {
+		t.Fatalf("finished label/notes = %q / %d chars", fin.Label, len(fin.Notes))
 	}
 }
 

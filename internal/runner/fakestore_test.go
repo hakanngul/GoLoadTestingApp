@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
@@ -77,9 +78,11 @@ func (s *fakeStore) CreateRun(_ context.Context, r model.Run) (model.Run, error)
 func (s *fakeStore) UpdateRun(_ context.Context, r model.Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.runs[r.ID]; !ok {
+	cur, ok := s.runs[r.ID]
+	if !ok {
 		return store.ErrNotFound
 	}
+	r.Label, r.Notes = cur.Label, cur.Notes // like the real stores
 	s.runs[r.ID] = r
 	return nil
 }
@@ -146,6 +149,18 @@ func (s *fakeStore) ListErrorSamples(_ context.Context, runID string) ([]model.E
 }
 
 func (s *fakeStore) Close() {}
+
+func (s *fakeStore) UpdateRunMeta(context.Context, string, *string, *string) (model.Run, error) {
+	return model.Run{}, store.ErrNotFound
+}
+func (s *fakeStore) DeleteRun(context.Context, string) error { return store.ErrNotFound }
+func (s *fakeStore) ListMetricsWithSnapshots(context.Context, string) ([]model.MetricPoint, [][]byte, error) {
+	return nil, nil, nil
+}
+func (s *fakeStore) SetBaseline(context.Context, string, string) (model.Test, error) {
+	return model.Test{}, store.ErrNotFound
+}
+func (s *fakeStore) RunsSince(context.Context, time.Time) ([]model.Run, error) { return nil, nil }
 
 func (s *fakeStore) runCount() int {
 	s.mu.Lock()

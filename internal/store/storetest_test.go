@@ -38,6 +38,11 @@ func runStoreSuite(t *testing.T, newStore func(t *testing.T) Store) {
 		{"MarkInterrupted", testMarkInterrupted},
 		{"NoAliasing", testNoAliasing},
 		{"Concurrent", testConcurrent},
+		{"RunMeta", testRunMeta},
+		{"DeleteRun", testDeleteRun},
+		{"Baseline", testBaseline},
+		{"MetricsWithSnapshots", testMetricsWithSnapshots},
+		{"RunsSince", testRunsSince},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

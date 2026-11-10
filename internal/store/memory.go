@@ -3,6 +3,7 @@ package store
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -262,8 +263,8 @@ func (m *Memory) CreateRun(ctx context.Context, r model.Run) (model.Run, error) 
 	return cloneRun(stored), nil
 }
 
-// UpdateRun replaces every field of an existing run except ID and TestID.
-// A zero StartedAt keeps the stored value.
+// UpdateRun replaces every field of an existing run except ID, TestID,
+// Label and Notes. A zero StartedAt keeps the stored value.
 func (m *Memory) UpdateRun(ctx context.Context, r model.Run) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -276,6 +277,7 @@ func (m *Memory) UpdateRun(ctx context.Context, r model.Run) error {
 	}
 	next := normRun(cloneRun(r))
 	next.ID, next.TestID = cur.ID, cur.TestID
+	next.Label, next.Notes = cur.Label, cur.Notes
 	if next.StartedAt.IsZero() {
 		next.StartedAt = cur.StartedAt
 	}
@@ -356,8 +358,14 @@ func (m *Memory) MarkInterrupted(ctx context.Context, msg string) (int, error) {
 	return n, nil
 }
 
-// deleteRunLocked removes a run and its children. Caller holds m.mu.
+// deleteRunLocked removes a run and its children and clears a baseline
+// pointing at it (ON DELETE SET NULL). Caller holds m.mu.
 func (m *Memory) deleteRunLocked(id string) {
+	if r, ok := m.runs[id]; ok {
+		if mt, ok := m.tests[r.TestID]; ok && mt.test.BaselineRunID == id {
+			mt.test.BaselineRunID = ""
+		}
+	}
 	delete(m.runs, id)
 	delete(m.metrics, id)
 	delete(m.errs, id)
@@ -511,4 +519,116 @@ func normRun(r model.Run) model.Run {
 		r.FinishedAt = &f
 	}
 	return r
+}
+
+// ---- reporting ---------------------------------------------------------------
+
+// UpdateRunMeta sets label and/or notes (nil = unchanged).
+func (m *Memory) UpdateRunMeta(ctx context.Context, id string, label, notes *string) (model.Run, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Run{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.runs[id]
+	if !ok {
+		return model.Run{}, ErrNotFound
+	}
+	if label != nil {
+		r.Label = *label
+	}
+	if notes != nil {
+		r.Notes = *notes
+	}
+	return cloneRun(*r), nil
+}
+
+// DeleteRun removes a run with its metrics and error samples and clears a
+// test baseline pointing at it.
+func (m *Memory) DeleteRun(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.runs[id]; !ok {
+		return ErrNotFound
+	}
+	m.deleteRunLocked(id)
+	return nil
+}
+
+// ListMetricsWithSnapshots returns a run's points and snapshots, aligned.
+func (m *Memory) ListMetricsWithSnapshots(ctx context.Context, runID string) ([]model.MetricPoint, [][]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	src := m.metrics[runID]
+	pts := make([]model.MetricPoint, len(src))
+	snaps := make([][]byte, len(src))
+	for i, p := range src {
+		pts[i] = p.point
+		snaps[i] = cloneBytes(p.snapshot)
+	}
+	return pts, snaps, nil
+}
+
+// SetBaseline sets or clears a test's baseline run.
+func (m *Memory) SetBaseline(ctx context.Context, testID, runID string) (model.Test, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Test{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mt, ok := m.tests[testID]
+	if !ok {
+		return model.Test{}, ErrNotFound
+	}
+	if runID != "" {
+		r, ok := m.runs[runID]
+		if !ok {
+			return model.Test{}, ErrNotFound
+		}
+		if r.TestID != testID {
+			return model.Test{}, fmt.Errorf("%w: run belongs to another test", ErrConflict)
+		}
+	}
+	mt.test.BaselineRunID = runID
+	return m.testLocked(mt), nil
+}
+
+// RunsSince returns runs started at or after since, newest first, with
+// summaries stripped of by_step.
+func (m *Memory) RunsSince(ctx context.Context, since time.Time) ([]model.Run, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	since = normTime(since)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	matched := make([]*model.Run, 0)
+	for _, r := range m.runs {
+		if !r.StartedAt.Before(since) {
+			matched = append(matched, r)
+		}
+	}
+	slices.SortFunc(matched, func(a, b *model.Run) int {
+		if runLess(a, b) {
+			return -1
+		}
+		if runLess(b, a) {
+			return 1
+		}
+		return 0
+	})
+	out := make([]model.Run, len(matched))
+	for i, r := range matched {
+		out[i] = cloneRun(*r)
+		if out[i].Summary != nil {
+			out[i].Summary.ByStep = nil
+		}
+	}
+	return out, nil
 }

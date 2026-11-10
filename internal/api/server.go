@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/report"
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
 )
@@ -58,6 +59,7 @@ type server struct {
 	log       *slog.Logger
 	authToken string
 	devCORS   bool
+	reporter  *report.Reporter
 
 	// heartbeat is the SSE keep-alive interval (overridable in tests).
 	heartbeat time.Duration
@@ -85,6 +87,7 @@ func newServer(cfg Config) *server {
 		log:       log,
 		authToken: cfg.AuthToken,
 		devCORS:   cfg.DevCORS,
+		reporter:  report.New(cfg.Store),
 		heartbeat: defaultHeartbeat,
 		api:       http.NewServeMux(),
 	}
@@ -115,6 +118,18 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/runs/{id}/stream", s.handleStream)
 
 	m.HandleFunc("GET /api/workers", s.handleWorkers)
+
+	// Reporting.
+	m.HandleFunc("PATCH /api/runs/{id}", s.handleUpdateRun)
+	m.HandleFunc("DELETE /api/runs/{id}", s.handleDeleteRun)
+	m.HandleFunc("GET /api/runs/{id}/report", s.handleRunReport)
+	m.HandleFunc("GET /api/runs/{id}/report.html", s.handleRunReportHTML)
+	m.HandleFunc("GET /api/runs/{id}/export.csv", s.handleExportCSV)
+	m.HandleFunc("GET /api/runs/{id}/export.json", s.handleExportJSON)
+	m.HandleFunc("GET /api/compare", s.handleCompare)
+	m.HandleFunc("GET /api/tests/{id}/trend", s.handleTrend)
+	m.HandleFunc("PUT /api/tests/{id}/baseline", s.handleSetBaseline)
+	m.HandleFunc("GET /api/reports/overview", s.handleOverview)
 }
 
 // handler assembles the middleware chain:
