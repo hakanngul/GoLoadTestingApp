@@ -26,3 +26,9 @@ tidy:
 
 clean:
 	rm -rf bin
+
+# Regenerate gRPC code. Needs protoc + protoc-gen-go + protoc-gen-go-grpc on PATH.
+.PHONY: proto
+proto:
+	protoc -I proto --go_out=. --go_opt=module=github.com/hakanngul/GoLoadTestingApp \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/hakanngul/GoLoadTestingApp proto/cluster.proto
