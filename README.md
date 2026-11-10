@@ -10,6 +10,18 @@ goloadtest worker -master host:9090   # worker: generates load for the master
 
 ## Quick start
 
+### macOS (UI in 3 commands)
+
+```bash
+brew install go node pnpm        # Go 1.24+, Node 22+, pnpm 10
+make serve                       # builds the UI + binary, starts on :8080
+open http://localhost:8080
+```
+
+`make serve` keeps data in memory (lost on exit) and allows any target. For
+persistent data run Postgres (`brew install postgresql@16`) and start with
+`-db 'postgres://...'` as shown below.
+
 Requirements: Go 1.24+, Node 22 + pnpm (for the UI build), PostgreSQL 16 (optional; there is an in-memory mode).
 
 ```bash

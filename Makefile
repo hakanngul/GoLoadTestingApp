@@ -2,7 +2,7 @@ BIN     := bin/goloadtest
 PKG     := ./...
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: all build ui run test fmt vet tidy clean
+.PHONY: all build ui run serve test fmt vet tidy clean
 
 all: fmt vet test build
 
@@ -14,6 +14,11 @@ build: ui
 
 run:
 	go run ./cmd/goloadtest
+
+# Local UI on http://localhost:8080: in-memory store (data is lost on exit),
+# single node, any target allowed. For development only.
+serve: build
+	GOLOAD_ALLOWED_TARGETS='*' ./bin/goloadtest serve -grpc-addr ""
 
 test:
 	go test -race -count=1 $(PKG)
