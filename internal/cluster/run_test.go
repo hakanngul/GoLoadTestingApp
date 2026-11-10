@@ -8,6 +8,7 @@ import (
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/cluster/pb"
 	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
+	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol"
 )
 
@@ -226,4 +227,18 @@ func TestRunErrorCountsMergedAndLateCarried(t *testing.T) {
 		t.Fatalf("s3 %+v rest %+v", s3.Errors, rest)
 	}
 	<-r.Done()
+}
+
+// The raw sample travels with the normalized message, worker to master.
+func TestErrorCountsCarrySample(t *testing.T) {
+	first := time.Unix(0, 1).UTC()
+	in := []model.ErrorGroup{
+		{Step: "get", Status: 404, Message: "item {uuid} not found", Sample: "item 3f2504e0-4f89-11d3-9a0c-0305e82c3301 not found",
+			Count: 3, First: first, Last: first.Add(time.Second)},
+		{Step: "get", Status: 503, Message: "status 503", Count: 1}, // no sample (old worker)
+	}
+	got := errorCounts(toErrorCounts(in))
+	if len(got) != 2 || got[0] != in[0] || got[1] != in[1] {
+		t.Fatalf("round trip = %+v", got)
+	}
 }

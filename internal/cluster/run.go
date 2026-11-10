@@ -485,6 +485,7 @@ func errorCounts(in []*pb.ErrorCount) []model.ErrorGroup {
 			Step:    e.GetStep(),
 			Status:  int(e.GetStatus()),
 			Message: e.GetMessage(),
+			Sample:  e.GetSample(),
 			Count:   e.GetCount(),
 		}
 		if ns := e.GetFirstUnixNano(); ns != 0 {

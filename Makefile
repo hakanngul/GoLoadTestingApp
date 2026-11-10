@@ -18,10 +18,12 @@ run:
 # Local UI on http://localhost:8080: data persists in ./goload.db (SQLite),
 # single node, any target allowed. For development only.
 # GOLOAD_DB=memory for a throwaway store, GOLOAD_DB='postgres://...' for PostgreSQL.
+# GOLOAD_RETENTION=90d deletes finished runs older than 90 days (default: keep forever).
 GOLOAD_DB ?= sqlite:./goload.db
+GOLOAD_RETENTION ?= 0
 
 serve: build
-	GOLOAD_ALLOWED_TARGETS='*' GOLOAD_DB='$(GOLOAD_DB)' ./bin/goloadtest serve -grpc-addr ""
+	GOLOAD_ALLOWED_TARGETS='*' GOLOAD_DB='$(GOLOAD_DB)' GOLOAD_RETENTION='$(GOLOAD_RETENTION)' ./bin/goloadtest serve -grpc-addr ""
 
 test:
 	go test -race -count=1 $(PKG)

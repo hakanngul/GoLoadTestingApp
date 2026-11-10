@@ -3,6 +3,8 @@ import type { ErrorGroup, LiveStats } from '../api/types';
 import { fmtDateTime, fmtInt, fmtMs, fmtPct, fmtRps } from '../lib/format';
 import {
   buildStatRows,
+  errorCopyText,
+  errorExample,
   errorStatusLabel,
   errorStatusTone,
   errorSteps,
@@ -11,6 +13,7 @@ import {
   groupKey,
   increasedFails,
   isOverflowGroup,
+  messageParts,
   newGroupKeys,
   nextSort,
   sortErrorGroups,
@@ -342,6 +345,7 @@ function FailureTr({
 }) {
   const [open, setOpen] = useState(false);
   const overflow = isOverflowGroup(g);
+  const example = errorExample(g);
   // Offer "show full message" only when the 2-line clamp actually hides text.
   const msgRef = useRef<HTMLDivElement>(null);
   const [long, setLong] = useState(false);
@@ -350,6 +354,15 @@ function FailureTr({
     if (!el || open) return;
     setLong(el.scrollHeight > el.clientHeight + 1);
   }, [g.message, open]);
+  const toggle = example
+    ? open
+      ? 'Hide example'
+      : 'Show example'
+    : long && !overflow
+      ? open
+        ? 'Show less'
+        : 'Show full message'
+      : null;
   return (
     <tr className={`${overflow ? 'overflow-row' : ''} ${flash}`}>
       <td className="num">
@@ -376,19 +389,39 @@ function FailureTr({
             <Icon name="alert" size={12} /> Other errors — more than 100 distinct errors; the rest are counted here
           </span>
         ) : (
-          <div ref={msgRef} className={`fail-msg mono ${open ? '' : 'clamped'}`}>
-            {g.message}
+          <div
+            ref={msgRef}
+            className={`fail-msg mono ${open ? '' : 'clamped'}`}
+            title={example ? 'Request-specific parts (IDs, values, times) are shown as {placeholders}' : undefined}
+          >
+            {messageParts(g.message).map((p, i) =>
+              p.ph ? (
+                <span key={i} className="fail-ph">
+                  {p.text}
+                </span>
+              ) : (
+                p.text
+              ),
+            )}
           </div>
         )}
-        {long && !overflow && (
-          <button className="linklike fail-more" onClick={() => setOpen((o) => !o)}>
-            {open ? 'Show less' : 'Show full message'}
+        {open && example && (
+          <div className="fail-example">
+            <span className="fail-example-label">{overflow ? 'First error counted here' : 'Example'}</span>
+            <div className="fail-msg mono">{example}</div>
+          </div>
+        )}
+        {toggle && (
+          <button className="linklike fail-more" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+            {toggle}
           </button>
         )}
       </td>
       <td className="num muted">{fmtTime(g.first)}</td>
       <td className="num">{fmtTime(g.last)}</td>
-      <td className="actions">{!overflow && <CopyButton text={g.message} />}</td>
+      <td className="actions">
+        {!overflow && <CopyButton text={errorCopyText(g)} label={example ? 'Copy example message' : undefined} />}
+      </td>
     </tr>
   );
 }

@@ -3,7 +3,8 @@
 // CONTRACT (routes). JSON bodies use internal/model types. Errors are
 // model.APIError with an appropriate status (400 validation, 404, 409, 500).
 //
-//	GET    /api/health                       -> {"status":"ok","version":"..."}
+//	GET    /api/health                       -> {"status":"ok","version":"...","retention_seconds":N}
+//	                                            (serve -retention; 0 = runs are kept forever)
 //
 //	GET    /api/tests                        -> []model.Test (LastRun filled)
 //	POST   /api/tests                        {name, yaml} -> 201 model.Test   (400 if yaml invalid: APIError.Details = validation errors)

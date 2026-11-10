@@ -118,6 +118,40 @@ export function errorStatusTone(status: number): 'bad' | 'warn' {
   return status === 0 || status >= 500 ? 'bad' : 'warn';
 }
 
+/**
+ * Raw example of a group, when it differs from the normalized message
+ * (otherwise null: nothing extra to show).
+ */
+export function errorExample(g: Pick<ErrorGroup, 'message' | 'sample'>): string | null {
+  return g.sample && g.sample !== g.message ? g.sample : null;
+}
+
+/** Text the copy button copies: the raw example if there is one, else the message. */
+export function errorCopyText(g: Pick<ErrorGroup, 'message' | 'sample'>): string {
+  return g.sample || g.message;
+}
+
+/** Placeholders the server substitutes into normalized messages. */
+const PLACEHOLDER = /\{(?:n|uuid|id|v|ts|dur|port)\}/g;
+
+/**
+ * Splits a normalized message into literal text and placeholder parts,
+ * for rendering placeholders distinctly. Concatenating the parts' text
+ * gives the message back.
+ */
+export function messageParts(message: string): { text: string; ph: boolean }[] {
+  const out: { text: string; ph: boolean }[] = [];
+  let last = 0;
+  for (const m of message.matchAll(PLACEHOLDER)) {
+    const i = m.index ?? 0;
+    if (i > last) out.push({ text: message.slice(last, i), ph: false });
+    out.push({ text: m[0], ph: true });
+    last = i + m[0].length;
+  }
+  if (last < message.length || out.length === 0) out.push({ text: message.slice(last), ph: false });
+  return out;
+}
+
 export function isOverflowGroup(g: Pick<ErrorGroup, 'message'>): boolean {
   return g.message === ERROR_GROUP_OTHER;
 }

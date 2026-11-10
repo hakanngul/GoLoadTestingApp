@@ -55,8 +55,8 @@ message MetricReport {
   repeated ErrorCount error_counts = 7;
 }
 
-// Failed requests with the same step, status and message (message cut to
-// 300 runes) counted during one second on one worker.
+// Failed requests with the same step, status and normalized message
+// (message cut to 300 runes) counted during one second on one worker.
 message ErrorCount {
   string step = 1;
   int32 status = 2;
@@ -64,6 +64,10 @@ message ErrorCount {
   int64 count = 4;
   int64 first_unix_nano = 5;
   int64 last_unix_nano = 6;
+  // First raw (not normalized) message of the group, cut to 300 runes.
+  // Empty from workers that predate normalization; the master then
+  // normalizes message itself and uses it as the sample.
+  string sample = 7;
 }
 
 message ErrorSample {

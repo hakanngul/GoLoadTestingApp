@@ -33,6 +33,9 @@ type Config struct {
 	// DevCORS allows cross-origin requests from the Vite dev server
 	// (http://localhost:5173). Leave false in production.
 	DevCORS bool
+	// Retention is the active data retention (serve -retention), reported
+	// by GET /api/health; 0 = runs are kept forever.
+	Retention time.Duration
 }
 
 // Limits on request bodies.
@@ -59,6 +62,7 @@ type server struct {
 	log       *slog.Logger
 	authToken string
 	devCORS   bool
+	retention time.Duration
 	reporter  *report.Reporter
 
 	// heartbeat is the SSE keep-alive interval (overridable in tests).
@@ -87,6 +91,7 @@ func newServer(cfg Config) *server {
 		log:       log,
 		authToken: cfg.AuthToken,
 		devCORS:   cfg.DevCORS,
+		retention: cfg.Retention,
 		reporter:  report.New(cfg.Store),
 		heartbeat: defaultHeartbeat,
 		api:       http.NewServeMux(),
@@ -204,7 +209,10 @@ func (c *captureWriter) Write(b []byte) (int, error) {
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.version})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok", "version": s.version,
+		"retention_seconds": int64(s.retention / time.Second),
+	})
 }
 
 func (s *server) handleWorkers(w http.ResponseWriter, _ *http.Request) {

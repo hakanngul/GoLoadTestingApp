@@ -44,6 +44,7 @@ func runStoreSuite(t *testing.T, newStore func(t *testing.T) Store) {
 		{"Baseline", testBaseline},
 		{"MetricsWithSnapshots", testMetricsWithSnapshots},
 		{"RunsSince", testRunsSince},
+		{"PruneRuns", testPruneRuns},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -753,6 +754,8 @@ func testErrorGroups(t *testing.T, s Store) {
 		{Step: "login", Status: 503, Message: "unavailable – ünïcödé", Count: 1234,
 			First: base, Last: base.Add(90*time.Second + 999*time.Nanosecond)},
 		{Step: "home", Status: 0, Message: "dial tcp: connection refused", Count: 7, First: base, Last: base},
+		{Step: "get", Status: 404, Message: "item {uuid} not found", Sample: "item 3f2504e0-4f89-11d3-9a0c-0305e82c3301 not found",
+			Count: 5, First: base, Last: base},
 		{Message: model.ErrorGroupOther, Count: 3},
 	}
 	if err := s.SetErrorGroups(c, r.ID, groups); err != nil {

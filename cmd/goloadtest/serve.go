@@ -43,7 +43,14 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		`target hosts runs may hit: "api.example.com,*.staging.example.com,10.0.0.0/8"; "*" allows all (development only)`)
 	grpcAddr := flags.String("grpc-addr", envOr("GOLOAD_GRPC_ADDR", ":9090"), `gRPC listen address for workers ("" disables distributed mode)`)
 	workerToken := flags.String("worker-token", os.Getenv("GOLOAD_WORKER_TOKEN"), "token workers must present (required when -grpc-addr is set)")
+	retentionFlag := flags.String("retention", os.Getenv("GOLOAD_RETENTION"),
+		`delete finished runs older than this, checked at start and hourly: e.g. 90d, 720h (min 1h; 0 or empty = keep forever). A test's baseline and latest run are always kept`)
 	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+	retention, err := parseRetention(*retentionFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "serve: -retention: %v\n", err)
 		return exitUsage
 	}
 
@@ -67,6 +74,17 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		log.Warn("mark interrupted runs", "error", err)
 	} else if n > 0 {
 		log.Info("marked interrupted runs", "count", n)
+	}
+	if retention > 0 {
+		rctx, cancel := context.WithCancel(ctx)
+		wait, err := startRetention(rctx, st, retention, log)
+		if err != nil {
+			cancel()
+			fmt.Fprintf(stderr, "serve: -retention: %v\n", err)
+			return exitUsage
+		}
+		// Runs before st.Close (deferred earlier): stop pruning first.
+		defer func() { cancel(); wait() }()
 	}
 
 	allow, err := allowlist.Parse(*allowTargets)
@@ -134,7 +152,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		Addr: *addr,
 		Handler: api.NewServer(api.Config{
 			Store: st, Runner: mgr, UI: ui, Version: version,
-			Logger: log, AuthToken: *token, DevCORS: *devCORS,
+			Logger: log, AuthToken: *token, DevCORS: *devCORS, Retention: retention,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -86,3 +86,34 @@ type Store interface {
 
 	Close()
 }
+
+// PrunedRun identifies a run removed (or, in a dry run, selected) by
+// Pruner.PruneRuns.
+type PrunedRun struct {
+	ID         string          `json:"id"`
+	TestID     string          `json:"test_id"`
+	TestName   string          `json:"test_name"`
+	Status     model.RunStatus `json:"status"`
+	StartedAt  time.Time       `json:"started_at"`
+	FinishedAt time.Time       `json:"finished_at"` // zero if never set
+}
+
+// Pruner is the data-retention side of a store. Every Store in this
+// package implements it; it is a separate interface so test doubles of
+// Store need not.
+type Pruner interface {
+	// PruneRuns deletes finished runs (any status but queued/running)
+	// whose finished_at - or started_at when finished_at is unset - is
+	// before olderThan, together with their metrics, error samples and
+	// error groups. Two kinds of run are always kept:
+	//   - a run that is some test's baseline (tests.baseline_run_id);
+	//   - the latest finished run of each test (newest started_at, then
+	//     highest ID), so "last run" and trends always have a data point.
+	// With dryRun nothing is deleted and the runs that would be are
+	// returned. Runs are returned oldest first.
+	//
+	// The SQLite store reclaims the freed file space after a prune that
+	// deleted something; if only that step fails, the deleted runs are
+	// returned together with the error.
+	PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool) ([]PrunedRun, error)
+}

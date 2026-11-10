@@ -13,6 +13,8 @@ export function RunsPage() {
   const labelQ = params.get('label') ?? '';
   const tests = useAsync(() => api.listTests(), []);
   const runs = useAsync(() => api.listRuns({ testId: testId || undefined, limit: 200 }), [testId], 5000);
+  const health = useAsync(() => api.health(), []);
+  const retentionS = health.data?.retention_seconds ?? 0;
   const now = useNow(5000);
   const all = runs.data ?? [];
   const list = useMemo(() => {
@@ -147,6 +149,19 @@ export function RunsPage() {
           </div>
         )}
       </div>
+      {retentionS > 0 && (
+        <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Runs older than {fmtRetention(retentionS)} are deleted automatically (a test&apos;s baseline and latest run
+          are kept).
+        </div>
+      )}
     </>
   );
+}
+
+function fmtRetention(seconds: number): string {
+  const days = seconds / 86400;
+  if (Number.isInteger(days)) return days === 1 ? '1 day' : `${days} days`;
+  const hours = Math.round(seconds / 3600);
+  return hours === 1 ? '1 hour' : `${hours} hours`;
 }

@@ -133,8 +133,8 @@ func TestHealth(t *testing.T) {
 	e := newEnv(t)
 	rec := e.do(t, "GET", "/api/health", nil)
 	wantStatus(t, rec, 200)
-	got := decode[map[string]string](t, rec)
-	if got["status"] != "ok" || got["version"] != "v1.2.3" {
+	got := decode[map[string]any](t, rec)
+	if got["status"] != "ok" || got["version"] != "v1.2.3" || got["retention_seconds"] != float64(0) {
 		t.Fatalf("health = %v", got)
 	}
 }

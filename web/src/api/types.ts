@@ -108,7 +108,13 @@ export interface ErrorGroup {
   step: string;
   /** 0 = transport error / timeout. */
   status: number;
+  /**
+   * Normalized message: request-specific parts replaced by placeholders
+   * ({n}, {uuid}, {id}, {v}, {ts}, {dur}, {port}).
+   */
   message: string;
+  /** First raw message seen for the group (may equal `message`; absent in older runs). */
+  sample?: string;
   count: number;
   /** RFC 3339. */
   first: string;
@@ -281,4 +287,6 @@ export interface APIErrorBody {
 export interface Health {
   status: string;
   version: string;
+  /** serve -retention in seconds; 0 (or absent on older servers) = runs are kept forever. */
+  retention_seconds?: number;
 }

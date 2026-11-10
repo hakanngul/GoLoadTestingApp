@@ -538,16 +538,28 @@ function sse(res, event, data) {
 }
 
 // ---- live statistics (event: stats) ----
-// Error groups that show up over the run: [step index, status, message, from second, weight].
+// Error groups that show up over the run:
+// [step index, status, normalized message, from second, weight, raw sample?].
+// Messages are normalized like the server's (metrics.NormalizeErrorMessage);
+// the sample is the first raw message of the group (omitted = same).
 const LIVE_ERRORS = [
   [0, 500, 'assert status eq 200: got 500', 0, 1],
   [1, 503, 'status 503: upstream connect error or disconnect/reset before headers. reset reason: overflow', 30, 3],
   [
+    1,
+    404,
+    'assert json $.error: got "product {n} not found (request {uuid})", want eq null',
+    40,
+    1.4,
+    'assert json $.error: got "product 418276 not found (request 7c9e6679-7425-40de-944b-e07fc1f90ae7)", want eq null',
+  ],
+  [
     2,
     0,
-    'Get "https://catalog.internal.example.test/v2/search?q=wireless+headphones": context deadline exceeded (Client.Timeout exceeded while awaiting headers)',
+    'Get "https://catalog.internal.example.test/v2/search?q={v}&page={v}": context deadline exceeded (Client.Timeout exceeded while awaiting headers)',
     55,
     2,
+    'Get "https://catalog.internal.example.test/v2/search?q=wireless+headphones&page=3": context deadline exceeded (Client.Timeout exceeded while awaiting headers)',
   ],
   [3, 429, 'assert status eq 200: got 429 (Too Many Requests)\nbody: {"error":"rate limit exceeded","retry_after":1}', 95, 1],
   [1, 0, 'dial tcp 10.0.3.17:443: connect: connection refused', 125, 0.6],
@@ -608,7 +620,15 @@ function accumulateLive(run, ls, p) {
     errs[d[0]] += c;
     const key = `${d[0]}|${d[1]}|${d[2]}`;
     const at = iso(Date.parse(p.t) + Math.floor(rand() * 900));
-    const g = ls.groups.get(key) || { step: ls.steps[d[0]], status: d[1], message: d[2], count: 0, first: at, last: at };
+    const g = ls.groups.get(key) || {
+      step: ls.steps[d[0]],
+      status: d[1],
+      message: d[2],
+      sample: d[5] ?? d[2],
+      count: 0,
+      first: at,
+      last: at,
+    };
     g.count += c;
     g.last = at;
     ls.groups.set(key, g);

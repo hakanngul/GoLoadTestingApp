@@ -286,14 +286,23 @@ type LiveStats struct {
 	Errors []ErrorGroup `json:"errors"`
 }
 
-// ErrorGroup counts failed requests with the same step, status and message.
+// ErrorGroup counts failed requests with the same step, status and
+// (normalized) message.
 type ErrorGroup struct {
-	Step    string    `json:"step"`
-	Status  int       `json:"status"` // 0 = transport error / timeout
-	Message string    `json:"message"`
-	Count   int64     `json:"count"`
-	First   time.Time `json:"first"`
-	Last    time.Time `json:"last"`
+	Step   string `json:"step"`
+	Status int    `json:"status"` // 0 = transport error / timeout
+	// Message is the normalized message: request-specific parts (IDs,
+	// URL values, timestamps, ephemeral ports) replaced by placeholders
+	// such as {n}, {uuid}, {id}, {v}, {ts}, {port} (see
+	// metrics.NormalizeErrorMessage).
+	Message string `json:"message"`
+	// Sample is the first raw message seen for the group (cut to 300
+	// runes); it may equal Message. Empty in groups stored before
+	// normalization existed.
+	Sample string    `json:"sample,omitempty"`
+	Count  int64     `json:"count"`
+	First  time.Time `json:"first"`
+	Last   time.Time `json:"last"`
 }
 
 // MaxErrorGroups caps the distinct error groups tracked per run.

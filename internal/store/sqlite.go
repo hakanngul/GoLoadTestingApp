@@ -35,7 +35,8 @@ var sqliteMigrationFS embed.FS
 // (UTC), the precision PostgreSQL keeps, so both stores return identical
 // values and ORDER BY works numerically.
 type SQLite struct {
-	w, r *sql.DB
+	w, r   *sql.DB
+	memory bool // ":memory:" database: nothing to reclaim on disk
 }
 
 var _ Store = (*SQLite)(nil)
@@ -57,6 +58,10 @@ func NewSQLite(ctx context.Context, path string) (*SQLite, error) {
 	memory := path == ":memory:"
 
 	pragmas := []string{
+		// Must come first: it only takes effect on a database without
+		// tables, and before journal_mode(WAL) writes the file header. On
+		// an existing file it is inert until a VACUUM (see sqlite_prune.go).
+		"auto_vacuum(INCREMENTAL)",
 		fmt.Sprintf("busy_timeout(%d)", sqliteBusyTimeout.Milliseconds()),
 		"foreign_keys(1)",
 		"synchronous(NORMAL)", // durable across app crashes in WAL mode; fsync on checkpoint
@@ -116,7 +121,7 @@ func NewSQLite(ctx context.Context, path string) (*SQLite, error) {
 			return nil, fmt.Errorf("store: sqlite: open %s: %w", path, err)
 		}
 	}
-	return &SQLite{w: w, r: r}, nil
+	return &SQLite{w: w, r: r, memory: memory}, nil
 }
 
 // Close checkpoints the WAL into the main file and closes every

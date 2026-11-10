@@ -25,6 +25,8 @@ services:
     environment:
       GOLOAD_ADDR: ":8080"
       GOLOAD_DB: sqlite:/data/goload.db
+      # Delete finished runs older than this (e.g. 90d); 0 = keep forever.
+      GOLOAD_RETENTION: ${GOLOAD_RETENTION:-0}
       # Bearer token for the REST API / UI. Empty disables auth: never do
       # that on a reachable host.
       GOLOAD_TOKEN: ${GOLOAD_TOKEN:?set GOLOAD_TOKEN in .env}

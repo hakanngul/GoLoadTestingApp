@@ -21,7 +21,8 @@ open http://localhost:8080
 `make serve` keeps tests, runs, metrics and error groups in `./goload.db`
 (SQLite, created on first start; survives restarts) and allows any target. No
 database server is needed. `GOLOAD_DB=memory make serve` gives a throwaway
-store instead.
+store instead. Runs are kept forever by default; `GOLOAD_RETENTION=90d make serve`
+deletes finished runs older than 90 days (see [Retention](#retention)).
 
 Requirements: Go 1.24+, Node 22 + pnpm (for the UI build). PostgreSQL 16 is optional (see [Data and backups](#data-and-backups)).
 
@@ -77,6 +78,39 @@ Restore by stopping the master and putting the backup in place as `goload.db`
 (delete any stale `goload.db-wal` / `goload.db-shm`). Switching between SQLite
 and PostgreSQL does not migrate existing data.
 
+#### Retention
+
+Every run stores one metric point (with its HDR histograms) per second, so the
+database grows with every test you run: roughly 4 KiB per run-second on SQLite,
+about 2.4 MiB for a 10-minute run. Nothing is deleted unless you opt in:
+
+```bash
+goloadtest serve -retention 90d ...        # or GOLOAD_RETENTION=90d; also 720h, 1d12h
+goloadtest prune -older-than 30d -dry-run  # one-shot: list what would be deleted
+goloadtest prune -older-than 30d           # ... and delete it (-db as for serve)
+```
+
+With `-retention` the master prunes at start and then every hour, and logs how
+many runs it deleted; `0` (the default) keeps everything, and anything below
+`1h` is rejected. A run is deleted, with its metrics, error samples and error
+groups, once it has finished (any status but queued/running) and its finish
+time (start time if it never recorded one) is older than the retention. Two
+runs are always kept, whatever their age: **a test's baseline run**, and **the
+latest finished run of each test**, so the Tests page, trends and comparisons
+always have something to show. Deleting a test still deletes all of its runs.
+`GET /api/health` reports the active setting as `retention_seconds`, and the
+Runs page shows it.
+
+SQLite gives the space back to the file system after each prune that deleted
+something (incremental auto-vacuum, run in 16 MiB steps). A database file
+created before this feature has to be rewritten once with a full `VACUUM` to
+enable that; it happens on its first prune (after the delete, so on the
+smaller file), blocks the master's writes while it runs and needs free disk
+space for a copy of the remaining data. Measured: 50 runs x 600 s (119 MiB),
+45 runs pruned to 12 MiB in 0.4 s with the one-time `VACUUM`, 1.3 s with the
+incremental path. PostgreSQL reuses the freed space through autovacuum; the
+files only shrink with a manual `VACUUM FULL`.
+
 ## Scenario format
 
 One YAML file per test. `internal/scenario/types.go` is the single source of truth. Examples live in `examples/`:
@@ -119,6 +153,7 @@ auth:
 - **Coordinated omission.** Latency of an iteration's first step is measured from its *scheduled* start, not from when it was sent.
 - **Percentiles.** Each worker sends HDR histograms every second. The master merges them; percentiles are never averaged.
 - **Errors.** HTTP 400 and above counts as an error unless the step asserts on status explicitly.
+- **Error groups.** Every failure is counted in a group keyed by step, status and a *normalized* message (at most 100 groups per run, then one "other errors" group). Request-specific parts are replaced so that one cause stays one group: UUIDs become `{uuid}`, long hex/base64 tokens `{id}`, numbers of 4+ digits `{n}` (`status 503` is kept), long durations `{dur}`, timestamps `{ts}`, URL path numbers `{n}`, query values `{v}` (keys kept), and the ephemeral local port in `127.0.0.1:54321->…` `{port}`. Each group keeps its first raw message as an example: the UI shows it under "Show example" and copies it.
 - **Self-check.** Generator CPU is reported. A run gets a warning if it reaches 80%, because latency may then come from the generator instead of the target.
 
 Measured in this repo's environment (local target):

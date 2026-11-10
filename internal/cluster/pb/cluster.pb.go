@@ -384,8 +384,8 @@ func (x *MetricReport) GetErrorCounts() []*ErrorCount {
 	return nil
 }
 
-// Failed requests with the same step, status and message (message cut to
-// 300 runes) counted during one second on one worker.
+// Failed requests with the same step, status and normalized message
+// (message cut to 300 runes) counted during one second on one worker.
 type ErrorCount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Step          string                 `protobuf:"bytes,1,opt,name=step,proto3" json:"step,omitempty"`
@@ -394,6 +394,10 @@ type ErrorCount struct {
 	Count         int64                  `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
 	FirstUnixNano int64                  `protobuf:"varint,5,opt,name=first_unix_nano,json=firstUnixNano,proto3" json:"first_unix_nano,omitempty"`
 	LastUnixNano  int64                  `protobuf:"varint,6,opt,name=last_unix_nano,json=lastUnixNano,proto3" json:"last_unix_nano,omitempty"`
+	// First raw (not normalized) message of the group, cut to 300 runes.
+	// Empty from workers that predate normalization; the master then
+	// normalizes message itself and uses it as the sample.
+	Sample        string `protobuf:"bytes,7,opt,name=sample,proto3" json:"sample,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -468,6 +472,13 @@ func (x *ErrorCount) GetLastUnixNano() int64 {
 		return x.LastUnixNano
 	}
 	return 0
+}
+
+func (x *ErrorCount) GetSample() string {
+	if x != nil {
+		return x.Sample
+	}
+	return ""
 }
 
 type ErrorSample struct {
@@ -896,7 +907,7 @@ const file_cluster_proto_rawDesc = "" +
 	"\x06active\x18\x04 \x01(\x03R\x06active\x12\x10\n" +
 	"\x03cpu\x18\x05 \x01(\x01R\x03cpu\x12\x1a\n" +
 	"\bsnapshot\x18\x06 \x01(\fR\bsnapshot\x12@\n" +
-	"\ferror_counts\x18\a \x03(\v2\x1d.goload.cluster.v1.ErrorCountR\verrorCounts\"\xb6\x01\n" +
+	"\ferror_counts\x18\a \x03(\v2\x1d.goload.cluster.v1.ErrorCountR\verrorCounts\"\xce\x01\n" +
 	"\n" +
 	"ErrorCount\x12\x12\n" +
 	"\x04step\x18\x01 \x01(\tR\x04step\x12\x16\n" +
@@ -904,7 +915,8 @@ const file_cluster_proto_rawDesc = "" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12\x14\n" +
 	"\x05count\x18\x04 \x01(\x03R\x05count\x12&\n" +
 	"\x0ffirst_unix_nano\x18\x05 \x01(\x03R\rfirstUnixNano\x12$\n" +
-	"\x0elast_unix_nano\x18\x06 \x01(\x03R\flastUnixNano\"s\n" +
+	"\x0elast_unix_nano\x18\x06 \x01(\x03R\flastUnixNano\x12\x16\n" +
+	"\x06sample\x18\a \x01(\tR\x06sample\"s\n" +
 	"\vErrorSample\x12\x1e\n" +
 	"\vt_unix_nano\x18\x01 \x01(\x03R\ttUnixNano\x12\x12\n" +
 	"\x04step\x18\x02 \x01(\tR\x04step\x12\x16\n" +

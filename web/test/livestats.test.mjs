@@ -4,6 +4,8 @@ import { test } from 'node:test';
 import {
   AGGREGATED,
   buildStatRows,
+  errorCopyText,
+  errorExample,
   errorStatusLabel,
   errorStatusTone,
   errorSteps,
@@ -13,6 +15,7 @@ import {
   groupKey,
   increasedFails,
   isOverflowGroup,
+  messageParts,
   newGroupKeys,
   nextSort,
   sortErrorGroups,
@@ -188,4 +191,31 @@ test('relative times', () => {
   assert.equal(fmtRunOffset('2026-01-01T00:01:35Z', '2026-01-01T00:00:00Z'), '+1:35');
   assert.equal(fmtRunOffset('2026-01-01T01:02:03Z', '2026-01-01T00:00:00Z'), '+1:02:03');
   assert.equal(fmtRunOffset('bad', '2026-01-01T00:00:00Z'), '—');
+});
+
+test('errorExample: raw sample only when it differs from the normalized message', () => {
+  assert.equal(errorExample({ message: 'order {n} failed', sample: 'order 123456 failed' }), 'order 123456 failed');
+  assert.equal(errorExample({ message: 'status 503', sample: 'status 503' }), null);
+  assert.equal(errorExample({ message: 'status 503' }), null); // older runs: no sample
+  assert.equal(errorExample({ message: 'status 503', sample: '' }), null);
+});
+
+test('errorCopyText: copies the raw sample, falling back to the message', () => {
+  assert.equal(errorCopyText({ message: 'order {n} failed', sample: 'order 123456 failed' }), 'order 123456 failed');
+  assert.equal(errorCopyText({ message: 'status 503' }), 'status 503');
+});
+
+test('messageParts: splits out known placeholders only', () => {
+  const msg = 'Get "http://h/items/{n}?q={v}": item {uuid} at {ts} ({other}) port {port} {dur} {id}';
+  const parts = messageParts(msg);
+  assert.equal(parts.map((p) => p.text).join(''), msg);
+  assert.deepEqual(
+    parts.filter((p) => p.ph).map((p) => p.text),
+    ['{n}', '{v}', '{uuid}', '{ts}', '{port}', '{dur}', '{id}'],
+  );
+  assert.deepEqual(messageParts('status 503'), [{ text: 'status 503', ph: false }]);
+  assert.deepEqual(messageParts(''), [{ text: '', ph: false }]);
+  assert.deepEqual(messageParts('{n}'), [{ text: '{n}', ph: true }]);
+  // Calling twice gives the same result (no regex lastIndex leaking).
+  assert.deepEqual(messageParts('a {n} b'), messageParts('a {n} b'));
 });

@@ -466,7 +466,7 @@ func toErrorCounts(gs []model.ErrorGroup) []*pb.ErrorCount {
 	}
 	out := make([]*pb.ErrorCount, len(gs))
 	for i, g := range gs {
-		e := &pb.ErrorCount{Step: g.Step, Status: int32(g.Status), Message: g.Message, Count: g.Count}
+		e := &pb.ErrorCount{Step: g.Step, Status: int32(g.Status), Message: g.Message, Sample: g.Sample, Count: g.Count}
 		if !g.First.IsZero() {
 			e.FirstUnixNano = g.First.UnixNano()
 		}

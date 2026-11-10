@@ -668,3 +668,75 @@ func (m *Memory) RunsSince(ctx context.Context, since time.Time) ([]model.Run, e
 	}
 	return out, nil
 }
+
+var _ Pruner = (*Memory)(nil)
+
+// PruneRuns deletes old finished runs except baselines and each test's
+// latest finished run (see Pruner).
+func (m *Memory) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool) ([]PrunedRun, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cutoff := normTime(olderThan)
+	keep := make(map[string]bool)
+	latest := make(map[string]*model.Run) // test ID -> latest finished run
+	for _, mt := range m.tests {
+		if id := mt.test.BaselineRunID; id != "" {
+			keep[id] = true
+		}
+	}
+	for _, r := range m.runs {
+		if !prunableStatus(r.Status) {
+			continue
+		}
+		if cur, ok := latest[r.TestID]; !ok || runLess(r, cur) {
+			latest[r.TestID] = r
+		}
+	}
+	for _, r := range latest {
+		keep[r.ID] = true
+	}
+
+	var out []PrunedRun
+	for _, r := range m.runs {
+		if !prunableStatus(r.Status) || keep[r.ID] {
+			continue
+		}
+		at := r.StartedAt
+		if r.FinishedAt != nil {
+			at = *r.FinishedAt
+		}
+		if !at.Before(cutoff) {
+			continue
+		}
+		p := PrunedRun{ID: r.ID, TestID: r.TestID, TestName: r.TestName, Status: r.Status, StartedAt: r.StartedAt}
+		if r.FinishedAt != nil {
+			p.FinishedAt = *r.FinishedAt
+		}
+		out = append(out, p)
+	}
+	slices.SortFunc(out, comparePruned)
+	if !dryRun {
+		for _, p := range out {
+			m.deleteRunLocked(p.ID)
+		}
+	}
+	return out, nil
+}
+
+// prunableStatus reports whether a run in status s may be pruned: every
+// status except the active ones.
+func prunableStatus(s model.RunStatus) bool {
+	return s != model.RunQueued && s != model.RunRunning
+}
+
+// comparePruned orders pruned runs oldest first (StartedAt, then ID).
+func comparePruned(a, b PrunedRun) int {
+	if c := a.StartedAt.Compare(b.StartedAt); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.ID, b.ID)
+}

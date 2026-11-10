@@ -23,10 +23,15 @@ type errKey struct {
 // otherKey is the key of the overflow group.
 var otherKey = errKey{message: model.ErrorGroupOther}
 
-// ErrorGrouper counts failed requests by (step, status, message), keeping
+// ErrorGrouper counts failed requests by (step, status, normalized
+// message), keeping
 // at most max distinct groups; failures that would open a further group
 // are counted in one overflow group {Step: "", Status: 0, Message:
 // model.ErrorGroupOther}. It is safe for concurrent use.
+//
+// Messages are normalized with NormalizeErrorMessage so that failures
+// differing only in IDs, URL values, timestamps or ephemeral ports share a
+// group; each group keeps the first raw message as its Sample.
 //
 // Only failures touch it (one mutex), so the success path costs nothing.
 // Counts from other groupers (remote workers) are folded in with Merge.
@@ -75,22 +80,36 @@ func truncateRunes(s string, n int) string {
 	return s
 }
 
+// groupMessage returns the grouping key message (normalized, cut to
+// ErrorMessageMaxRunes) and the raw sample (cut likewise) for msg. The raw
+// text is cut generously before normalizing so that an ID straddling the
+// final cut is still recognized.
+func groupMessage(msg string) (key, sample string) {
+	raw := truncateRunes(msg, 2*ErrorMessageMaxRunes)
+	return truncateRunes(NormalizeErrorMessage(raw), ErrorMessageMaxRunes),
+		truncateRunes(raw, ErrorMessageMaxRunes)
+}
+
 // Record counts one failed result. Results without an error are ignored.
 func (g *ErrorGrouper) Record(step string, status int, err error) {
 	if err == nil {
 		return
 	}
-	k := errKey{step: step, status: status, message: ErrorMessage(err)}
+	msg, sample := groupMessage(err.Error())
+	k := errKey{step: step, status: status, message: msg}
 	t := g.now()
 	g.mu.Lock()
-	g.addLocked(k, 1, t, t)
+	g.addLocked(k, 1, t, t, sample)
 	g.mu.Unlock()
 }
 
 // Merge adds counts from another grouper's groups (e.g. a worker's
-// per-second delta). Messages are truncated like Record's; a group with
-// Message model.ErrorGroupOther and no step/status goes to the overflow
-// group. Groups with Count <= 0 are ignored.
+// per-second delta). Messages are normalized and truncated like Record's
+// (a no-op for groups from another ErrorGrouper); a group's Sample (or,
+// without one, its raw Message) becomes the merged group's sample if it is
+// the earliest seen. A group with Message model.ErrorGroupOther and no
+// step/status goes to the overflow group. Groups with Count <= 0 are
+// ignored.
 func (g *ErrorGrouper) Merge(groups []model.ErrorGroup) {
 	if len(groups) == 0 {
 		return
@@ -101,12 +120,24 @@ func (g *ErrorGrouper) Merge(groups []model.ErrorGroup) {
 		if e.Count <= 0 {
 			continue
 		}
-		k := errKey{step: e.Step, status: e.Status, message: truncateRunes(e.Message, ErrorMessageMaxRunes)}
-		g.addLocked(k, e.Count, e.First, e.Last)
+		msg, sample := groupMessage(e.Message)
+		if e.Step == "" && e.Status == 0 && e.Message == model.ErrorGroupOther {
+			msg = e.Message
+		}
+		if e.Sample != "" {
+			sample = truncateRunes(e.Sample, ErrorMessageMaxRunes)
+		} else if msg == model.ErrorGroupOther {
+			sample = ""
+		}
+		k := errKey{step: e.Step, status: e.Status, message: msg}
+		g.addLocked(k, e.Count, e.First, e.Last, sample)
 	}
 }
 
-func (g *ErrorGrouper) addLocked(k errKey, n int64, first, last time.Time) {
+// addLocked adds n failures to k's group (or the overflow group). sample
+// becomes the group's Sample when the group has none yet or first is
+// earlier than every failure counted so far.
+func (g *ErrorGrouper) addLocked(k errKey, n int64, first, last time.Time, sample string) {
 	e, ok := g.groups[k]
 	if !ok {
 		if k == otherKey || len(g.groups) >= g.max {
@@ -120,7 +151,11 @@ func (g *ErrorGrouper) addLocked(k errKey, n int64, first, last time.Time) {
 		}
 	}
 	e.Count += n
-	if !first.IsZero() && (e.First.IsZero() || first.Before(e.First)) {
+	earliest := !first.IsZero() && (e.First.IsZero() || first.Before(e.First))
+	if sample != "" && (e.Sample == "" || earliest) {
+		e.Sample = sample
+	}
+	if earliest {
 		e.First = first
 	}
 	if !last.IsZero() && last.After(e.Last) {
