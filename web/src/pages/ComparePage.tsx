@@ -6,6 +6,7 @@ import { ChartCard, TimeSeriesChart, usePalette, yMs, yPct, type Series } from '
 import { Delta, ErrorAlert, Loading, StatusBadge } from '../components/ui';
 import { fmtDateTime, fmtInt, fmtMs, fmtPct, fmtRps, fmtSeconds, runDurationS, shortId } from '../lib/format';
 import { useAsync } from '../lib/hooks';
+import { trimPartialTail } from '../lib/metrics';
 
 interface Loaded {
   run: Run;
@@ -15,7 +16,7 @@ interface Loaded {
 async function loadRun(id: string): Promise<Loaded | null> {
   if (!id) return null;
   const [run, metrics] = await Promise.all([api.getRun(id), api.runMetrics(id)]);
-  return { run, metrics };
+  return { run, metrics: isFinished(run.status) ? trimPartialTail(metrics) : metrics };
 }
 
 type Row = Record<string, number | null>;

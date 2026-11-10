@@ -94,7 +94,12 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 				log.Error("grpc serve", "error", err)
 			}
 		}()
-		defer gs.GracefulStop()
+		// Not GracefulStop: worker streams never end on their own, so it
+		// would wait forever and leave a half-dead master that workers stay
+		// attached to. Active runs are already stopped by mgr.Shutdown
+		// (deferred calls run after it); Stop drops the streams so workers
+		// reconnect to the next master.
+		defer gs.Stop()
 		ropts.Dispatcher = master
 		ropts.WorkerToken = *workerToken
 		ropts.MasterAddr = os.Getenv("GOLOAD_MASTER_ADVERTISE_ADDR")
@@ -137,6 +142,9 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		}
 	case <-ctx.Done():
 	}
+	// Restore default signal handling: a second Ctrl-C / SIGTERM kills the
+	// process if graceful shutdown hangs.
+	stop()
 
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

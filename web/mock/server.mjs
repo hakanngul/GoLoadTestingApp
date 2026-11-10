@@ -1,6 +1,14 @@
 // Mock GoLoad backend for UI development and screenshots.
 // Plain Node, no dependencies. Implements every route from internal/api/doc.go
 // with in-memory data. Usage: node mock/server.mjs [--port 8080]
+//
+// Environment:
+//   MOCK_TOKEN=secret     require `Authorization: Bearer secret` on /api/* except
+//                         /api/health (SSE also accepts ?access_token=), like `serve -token`
+//   MOCK_PROVISIONER=0    no cloud provisioner: asking for more workers than are idle
+//                         returns 409 "not enough idle workers" (default: provisioner on,
+//                         such runs start `queued` while spot instances "launch")
+//   MOCK_QUEUE_S=150      how long the queued run seeded at boot stays queued
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -10,6 +18,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const examplesDir = join(here, '..', '..', 'examples');
 const portArg = process.argv.indexOf('--port');
 const PORT = Number(portArg > 0 ? process.argv[portArg + 1] : process.env.PORT || 8080);
+const TOKEN = process.env.MOCK_TOKEN || '';
+const PROVISIONER = process.env.MOCK_PROVISIONER !== '0';
+const QUEUE_S = Number(process.env.MOCK_QUEUE_S || 150);
+const LAUNCH_S = 8; // spot launch time for runs started from the UI
 
 // ---------------------------------------------------------------- utils
 let seed = 1337;
@@ -385,19 +397,20 @@ function startLive(run, opts = {}) {
   errorsByRun.set(run.id, []);
   const state = { meta, clients: new Set(), stopped: false, opts };
   live.set(run.id, state);
-  const startedMs = Date.parse(run.started_at);
+  // Load starts once the run leaves `queued` (spot workers launched).
+  const startedMs = Date.parse(run.started_at) + (opts.queueMs ?? 0);
   // Backfill seconds that already "happened" (for a run pre-started at boot).
   const already = Math.floor((Date.now() - startedMs) / 1000);
   for (let s = 1; s <= already && s <= meta.total; s++) pts.push(genPoint(run, meta, s, opts));
-  if (run.status === 'queued') {
-    setTimeout(() => {
+  state.timer = setInterval(() => {
+    if (state.stopped) return finishLive(run);
+    if (run.status === 'queued') {
+      if (Date.now() < startedMs) return;
       run.status = 'running';
       for (const c of state.clients) sse(c, 'status', run);
-    }, 300);
-  }
-  state.timer = setInterval(() => {
+    }
     const elapsed = Math.floor((Date.now() - startedMs) / 1000);
-    if (state.stopped || elapsed > meta.total) return finishLive(run);
+    if (elapsed > meta.total) return finishLive(run);
     if (elapsed < 1 || pts.length >= elapsed) return;
     const p = genPoint(run, meta, elapsed, opts);
     pts.push(p);
@@ -425,13 +438,13 @@ function finishLive(run) {
 }
 
 // A run that is in progress when the mock boots (started 75s ago).
-function createRun(testId, workers, startedAgoS = 0) {
+function createRun(testId, workers, startedAgoS = 0, queueS = 0) {
   const t = tests.get(testId);
   const run = {
     id: 'r_' + hex(10),
     test_id: testId,
     test_name: t.name,
-    status: startedAgoS > 0 ? 'running' : 'queued',
+    status: queueS > 0 ? 'queued' : 'running',
     yaml: t.yaml,
     workers: workers || 1,
     started_at: iso(Date.now() - startedAgoS * 1000),
@@ -440,11 +453,14 @@ function createRun(testId, workers, startedAgoS = 0) {
     warnings: [],
   };
   runs.set(run.id, run);
-  startLive(run);
+  startLive(run, { queueMs: queueS * 1000 });
   return run;
 }
 const liveRun = createRun('t_27d5b9f8', 1, 75);
 console.log(`[mock] live run ${liveRun.id} (catalog-soak) in progress`);
+// A distributed run waiting for spot instances (4 workers wanted, 2 idle).
+const queuedRun = createRun('t_9c1e44a0', 4, 42, 42 + QUEUE_S);
+console.log(`[mock] queued run ${queuedRun.id} (smoke) waiting ${QUEUE_S}s for workers`);
 
 // ---------------------------------------------------------------- workers
 function workers() {
@@ -454,7 +470,7 @@ function workers() {
   return [
     {
       id: 'local',
-      addr: '127.0.0.1:7070',
+      addr: 'in-process',
       state: runningId ? 'busy' : 'idle',
       run_id: runningId,
       cpu: lastLive ? lastLive.cpu : 0.03,
@@ -464,6 +480,7 @@ function workers() {
     { id: 'wrk-eu-1', addr: '10.0.4.21:7070', state: 'idle', cpu: 0.04, last_seen: iso(t - 2100), version: '0.4.0' },
     { id: 'wrk-eu-2', addr: '10.0.4.22:7070', state: 'idle', cpu: 0.05, last_seen: iso(t - 1300), version: '0.4.0' },
     { id: 'wrk-us-1', addr: '10.8.1.9:7070', state: 'lost', cpu: 0, last_seen: iso(t - 4 * 60e3), version: '0.3.2' },
+    { id: 'spot-i-0a3f9c', addr: '172.31.9.140:7070', state: 'lost', cpu: 0, last_seen: iso(t - 37 * 60e3), version: '0.4.0' },
   ];
 }
 
@@ -556,6 +573,16 @@ const server = createServer(async (req, res) => {
   try {
     if (a === 'health' && m === 'GET') return send(res, 200, { status: 'ok', version: '0.4.0-mock' });
 
+    if (TOKEN) {
+      const h = req.headers.authorization || '';
+      let got = /^bearer /i.test(h) ? h.slice(7).trim() : '';
+      if (!got && m === 'GET' && url.pathname.endsWith('/stream')) got = url.searchParams.get('access_token') || '';
+      if (got !== TOKEN) {
+        res.setHeader('WWW-Authenticate', 'Bearer realm="api"');
+        return apiErr(res, 401, 'unauthorized');
+      }
+    }
+
     if (a === 'validate' && m === 'POST') {
       const body = await readJSON(req);
       return send(res, 200, validate(String(body?.yaml ?? '')));
@@ -616,14 +643,20 @@ const server = createServer(async (req, res) => {
       }
       if (c === 'runs' && m === 'POST') {
         const body = (await readJSON(req)) || {};
-        if ([...runs.values()].some((r) => r.status === 'running' && r.test_id === t.id))
+        if ([...runs.values()].some((r) => (r.status === 'running' || r.status === 'queued') && r.test_id === t.id))
           return apiErr(res, 409, 'a run of this test is already in progress');
         const meta = scenarioMeta(t.yaml);
         const dataFile = (t.yaml.match(/^data:\s*\n\s+file:\s*(\S+)/m) || [])[1];
         if (dataFile && !t.files.some((f) => f.name === dataFile))
           return apiErr(res, 400, 'cannot start run', [`data.file: ${dataFile} is not uploaded`]);
         if (!meta.total) return apiErr(res, 400, 'cannot start run', ['load.stages: total duration is 0']);
-        const run = createRun(t.id, Number(body.workers) || 1, 0);
+        const want = Math.max(1, Number(body.workers) || 1);
+        const idle = workers().filter((w) => w.id !== 'local' && w.state === 'idle').length;
+        if (want > 1 && want > idle && !PROVISIONER)
+          return apiErr(res, 409, 'not enough idle workers', [
+            `cluster: not enough idle workers: ${want} requested, ${idle} idle`,
+          ]);
+        const run = createRun(t.id, want, 0, want > 1 && want > idle ? LAUNCH_S : 0);
         return send(res, 201, run);
       }
       return apiErr(res, 405, 'method not allowed');

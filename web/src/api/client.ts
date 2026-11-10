@@ -34,13 +34,62 @@ export function getToken(): string | null {
   }
 }
 
+export function setToken(token: string): void {
+  try {
+    window.localStorage.setItem(TOKEN_KEY, token.trim());
+  } catch {
+    /* storage unavailable (private mode / blocked) */
+  }
+}
+
+export function clearToken(): void {
+  try {
+    window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+// ---------- 401 handling ----------
+// Any API call that comes back 401 notifies the listeners (the auth gate in
+// App), which replaces the whole UI with the sign-in screen.
+type UnauthorizedListener = () => void;
+const unauthorizedListeners = new Set<UnauthorizedListener>();
+
+export function onUnauthorized(fn: UnauthorizedListener): () => void {
+  unauthorizedListeners.add(fn);
+  return () => {
+    unauthorizedListeners.delete(fn);
+  };
+}
+
+function notifyUnauthorized() {
+  for (const fn of unauthorizedListeners) fn();
+}
+
 function authHeaders(): Record<string, string> {
   const t = getToken();
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
-async function request<T>(method: string, path: string, body?: unknown, raw?: BodyInit): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json', ...authHeaders() };
+interface RequestOpts {
+  /** Explicit token (sign-in check) instead of the stored one. */
+  token?: string;
+  /** Do not notify the auth gate on 401 (the caller handles it). */
+  quiet401?: boolean;
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  raw?: BodyInit,
+  opts: RequestOpts = {},
+): Promise<T> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(opts.token !== undefined ? { Authorization: `Bearer ${opts.token}` } : authHeaders()),
+  };
   let payload: BodyInit | undefined;
   if (raw !== undefined) {
     payload = raw;
@@ -65,6 +114,7 @@ async function request<T>(method: string, path: string, body?: unknown, raw?: Bo
     } catch {
       /* non-JSON error body */
     }
+    if (res.status === 401 && !opts.quiet401) notifyUnauthorized();
     throw new APIError(res.status, msg, details);
   }
   if (res.status === 204 || res.status === 202) {
@@ -78,6 +128,10 @@ const enc = encodeURIComponent;
 
 export const api = {
   health: () => request<Health>('GET', '/api/health'),
+
+  /** Checks a token without touching stored state (GET /api/tests). */
+  checkToken: (token: string) =>
+    request<unknown>('GET', '/api/tests', undefined, undefined, { token, quiet401: true }).then(() => undefined),
 
   listTests: () => request<Test[] | null>('GET', '/api/tests').then((r) => r ?? []),
   getTest: (id: string) => request<Test>('GET', `/api/tests/${enc(id)}`),
@@ -138,8 +192,20 @@ export function subscribeRun(id: string, h: RunStreamHandlers): () => void {
   };
 
   es.addEventListener('open', () => h.onConnectionChange?.(true));
+  let probing = false;
   es.addEventListener('error', () => {
-    if (!closed) h.onConnectionChange?.(false);
+    if (closed) return;
+    h.onConnectionChange?.(false);
+    // EventSource hides the HTTP status. Probe with a normal request so a
+    // 401 (token revoked / missing) reaches the auth gate.
+    if (!probing) {
+      probing = true;
+      request<Run>('GET', `/api/runs/${enc(id)}`)
+        .catch(() => undefined)
+        .finally(() => {
+          probing = false;
+        });
+    }
   });
   es.addEventListener('metric', (ev) => {
     const p = parse<MetricPoint>(ev as MessageEvent);

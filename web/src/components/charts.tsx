@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import type { MetricPoint } from '../api/types';
 import { fmtClock, fmtCompact, fmtMs, fmtRps, fmtSeconds } from '../lib/format';
+import { trimPartialTail } from '../lib/metrics';
 import type { ProfilePoint } from '../lib/scenario';
 
 // Recharts writes colours into SVG presentation attributes, where CSS
@@ -224,13 +225,16 @@ export function RunCharts({
   points,
   targetUnit,
   xMax,
+  finished,
 }: {
   points: MetricPoint[];
   targetUnit: string;
   xMax?: number;
+  /** The run is over: hide a trailing partial-second point (display only). */
+  finished?: boolean;
 }) {
   const s = useRunSeries();
-  const data = points as unknown as Row[];
+  const data = useMemo(() => (finished ? trimPartialTail(points) : points) as unknown as Row[], [points, finished]);
   const rpsSeries = s.rps.map((x) => (x.key === 'target' ? { ...x, label: `Target (${targetUnit})` } : x));
   return (
     <div className="stack" style={{ gap: 12 }}>

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../api/client';
+import { APIError, api } from '../api/client';
 import type { Test } from '../api/types';
+import { useAsync } from '../lib/hooks';
+import { idleRemoteCount, remoteWorkers } from '../lib/workers';
 import { fmtSeconds } from '../lib/format';
 import { stagesToProfile, summarizeYaml, unitFor } from '../lib/scenario';
 import { ProfileChart } from './charts';
@@ -14,6 +16,7 @@ export function RunStartDialog({ test, onClose }: { test: Test; onClose: () => v
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [full, setFull] = useState<Test>(test);
+  const fleet = useAsync(() => api.listWorkers(), [], 5000);
 
   // The list endpoint may omit YAML in the future; make sure we have it.
   useEffect(() => {
@@ -27,6 +30,10 @@ export function RunStartDialog({ test, onClose }: { test: Test; onClose: () => v
   const unit = sum ? unitFor(sum.model) : 'it/s';
   const n = Number(workers);
   const workersValid = Number.isInteger(n) && n >= 1 && n <= 64;
+  const remote = remoteWorkers(fleet.data ?? []);
+  const connected = remote.filter((w) => w.state !== 'lost').length;
+  const idle = idleRemoteCount(fleet.data ?? []);
+  const notEnough = error instanceof APIError && error.status === 409 && /idle workers/i.test(error.message);
 
   const start = async () => {
     setBusy(true);
@@ -89,23 +96,82 @@ export function RunStartDialog({ test, onClose }: { test: Test; onClose: () => v
         ) : (
           <div className="muted">Scenario summary unavailable.</div>
         )}
-        <div className="field" style={{ maxWidth: 200 }}>
-          <label htmlFor="workers">Workers</label>
-          <input
-            id="workers"
-            className={`input num ${workersValid ? '' : 'invalid'}`}
-            type="number"
-            min={1}
-            max={64}
-            value={workers}
-            onChange={(e) => setWorkers(e.target.value)}
-          />
+        <div className="row" style={{ gap: 14, alignItems: 'flex-start' }}>
+          <div className="field" style={{ width: 110, flex: 'none' }}>
+            <label htmlFor="workers">Workers</label>
+            <input
+              id="workers"
+              className={`input num ${workersValid ? '' : 'invalid'}`}
+              type="number"
+              min={1}
+              max={64}
+              value={workers}
+              onChange={(e) => {
+                setWorkers(e.target.value);
+                if (notEnough) setError(null);
+              }}
+            />
+          </div>
+          <div className="grow" style={{ minWidth: 0, paddingTop: 20 }}>
+            <WorkerHint loading={fleet.loading && !fleet.data} n={workersValid ? n : 1} idle={idle} connected={connected} />
+          </div>
         </div>
-        <div className="hint" style={{ marginTop: -8 }}>
-          1 = local load generator. Distributed runs across several workers arrive in Phase 4.
-        </div>
-        <ErrorAlert error={error} title="Could not start run" />
+        {notEnough ? (
+          <NotEnoughWorkers error={error as APIError} requested={n} idle={idle} />
+        ) : (
+          <ErrorAlert error={error} title="Could not start run" />
+        )}
       </div>
     </Modal>
+  );
+}
+
+function WorkerHint({ loading, n, idle, connected }: { loading: boolean; n: number; idle: number; connected: number }) {
+  if (loading) return <div className="hint">Checking connected workers…</div>;
+  const head = (
+    <div style={{ fontWeight: 600, color: 'var(--text)' }}>
+      <span className={`dot ${idle > 0 ? 'ok' : ''}`} style={{ marginRight: 6, verticalAlign: 1 }} />
+      {idle} idle remote worker{idle === 1 ? '' : 's'} connected
+      {connected > idle && <span className="muted" style={{ fontWeight: 400 }}> · {connected - idle} busy</span>}
+    </div>
+  );
+  let body: string;
+  if (connected === 0 && n <= 1) {
+    body = 'The run executes inside the master (in-process load generator).';
+  } else if (n <= idle) {
+    body = `The run is split across ${n} of the idle remote workers.`;
+  } else {
+    const missing = n - idle;
+    body =
+      `${missing} more worker${missing === 1 ? '' : 's'} needed. If the master has a cloud provisioner, it launches ` +
+      `${missing} spot instance${missing === 1 ? '' : 's'} first (can take a few minutes); otherwise the run is rejected.`;
+  }
+  return (
+    <div className="hint" style={{ lineHeight: 1.5 }}>
+      {head}
+      {body}
+    </div>
+  );
+}
+
+function NotEnoughWorkers({ error, requested, idle }: { error: APIError; requested: number; idle: number }) {
+  // details look like "cluster: not enough idle workers: 3 requested, 1 idle"
+  const m = error.details.join(' ').match(/(\d+) requested, (\d+) idle/);
+  const req = m ? Number(m[1]) : requested;
+  const have = m ? Number(m[2]) : idle;
+  return (
+    <div className="alert warn" role="alert">
+      <div className="alert-title">Not enough idle workers</div>
+      <div style={{ marginTop: 4, lineHeight: 1.5 }}>
+        This run needs <strong>{req}</strong> worker{req === 1 ? '' : 's'} but only <strong>{have}</strong>{' '}
+        {have === 1 ? 'is' : 'are'} idle, and the master has no cloud provisioner to launch more. Lower the worker
+        count, wait for busy workers to finish, or start more workers.
+      </div>
+      {error.details.length > 0 && (
+        <div className="mono alert-details text-2" style={{ fontSize: 11.5 }}>
+          {error.details.join('; ')}
+        </div>
+      )}
+    </div>
   );
 }

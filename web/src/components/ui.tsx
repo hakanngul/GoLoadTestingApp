@@ -42,6 +42,14 @@ const paths: Record<string, ReactNode> = {
   refresh: <path d="M13 8a5 5 0 11-1.5-3.5M13 2.5V5h-2.5" />,
   up: <path d="M8 13V3M4 7l4-4 4 4" />,
   down: <path d="M8 3v10M4 9l4 4 4-4" />,
+  logout: <path d="M6.5 2.5H3v11h3.5M10 5l3 3-3 3M13 8H6" />,
+  key: (
+    <>
+      <circle cx="5.5" cy="10.5" r="3" />
+      <path d="M7.6 8.4L13.5 2.5M11 5l2 2" />
+    </>
+  ),
+  cloud: <path d="M4.5 12.5h7a3 3 0 00.4-5.97A4 4 0 004.3 6.6 3 3 0 004.5 12.5z" />,
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof paths | string; size?: number }) {
@@ -62,9 +70,30 @@ export function Icon({ name, size = 16 }: { name: keyof typeof paths | string; s
   );
 }
 
+// ---------- brand ----------
+export function BrandMark({ size = 22 }: { size?: number }) {
+  return (
+    <span className="brand-mark" style={{ width: size, height: size, borderRadius: Math.round(size / 4.4) }}>
+      <svg
+        width={Math.round(size * 0.64)}
+        height={Math.round(size * 0.64)}
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="#fff"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M2 12l3.5-4 3 2.5L14 4" />
+      </svg>
+    </span>
+  );
+}
+
 // ---------- status badges ----------
 const statusClass: Record<RunStatus, string> = {
-  queued: '',
+  queued: 'warn pulse',
   running: 'info pulse',
   passed: 'good',
   failed: 'bad',
@@ -78,7 +107,7 @@ export function StatusBadge({ status }: { status: RunStatus | undefined }) {
 }
 
 export function WorkerStateBadge({ state }: { state: string }) {
-  const cls = state === 'idle' ? 'good' : state === 'busy' ? 'info pulse' : state === 'lost' ? 'bad' : '';
+  const cls = state === 'idle' ? 'good' : state === 'busy' ? 'info pulse' : '';
   return <span className={`badge ${cls}`}>{state}</span>;
 }
 

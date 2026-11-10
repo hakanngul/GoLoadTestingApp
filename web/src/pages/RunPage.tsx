@@ -19,6 +19,7 @@ import {
 } from '../lib/format';
 import { useAsync, useNow } from '../lib/hooks';
 import { OP_SYMBOL, summarizeYaml, unitFor } from '../lib/scenario';
+import { remoteWorkers } from '../lib/workers';
 
 export function RunPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -123,6 +124,28 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
     };
   }, [initial.id, onDone]);
 
+  // Safety net while queued: the SSE `status` event flips it to running, but
+  // re-check now and then in case an event was missed during a reconnect.
+  const isQueued = run.status === 'queued';
+  useEffect(() => {
+    if (!isQueued) return;
+    let alive = true;
+    const h = window.setInterval(() => {
+      api
+        .getRun(initial.id)
+        .then((r) => {
+          if (!alive || r.status === 'queued') return;
+          if (isFinished(r.status)) onDone(r);
+          else setRun(r);
+        })
+        .catch(() => undefined);
+    }, 10000);
+    return () => {
+      alive = false;
+      window.clearInterval(h);
+    };
+  }, [isQueued, initial.id, onDone]);
+
   const sum = useMemo(() => summarizeYaml(run.yaml), [run.yaml]);
   const total = sum?.total ?? 0;
   const unit = sum ? unitFor(sum.model) : 'it/s';
@@ -155,21 +178,31 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
   };
 
   const progress = total > 0 ? Math.min(1, elapsed / total) : 0;
+  const queued = run.status === 'queued';
   const cpu = last?.cpu ?? 0;
 
   return (
     <>
       <RunHeader run={run}>
-        <div className="stack" style={{ gap: 4, alignItems: 'flex-end' }}>
-          <div className="num" style={{ fontSize: 15, fontWeight: 600 }}>
-            {fmtClock(elapsed)} <span className="muted">/ {fmtClock(total)}</span>
+        {queued ? (
+          <div className="stack" style={{ gap: 2, alignItems: 'flex-end' }}>
+            <div className="num" style={{ fontSize: 15, fontWeight: 600 }}>
+              {fmtClock(runDurationS(run.started_at, undefined))}
+            </div>
+            <div className="muted" style={{ fontSize: 11.5 }}>waiting for workers</div>
           </div>
-          <div className="progress">
-            <div style={{ width: `${progress * 100}%` }} />
+        ) : (
+          <div className="stack" style={{ gap: 4, alignItems: 'flex-end' }}>
+            <div className="num" style={{ fontSize: 15, fontWeight: 600 }}>
+              {fmtClock(elapsed)} <span className="muted">/ {fmtClock(total)}</span>
+            </div>
+            <div className="progress">
+              <div style={{ width: `${progress * 100}%` }} />
+            </div>
           </div>
-        </div>
+        )}
         <button className="btn danger-solid" onClick={() => setConfirmStop(true)} disabled={stopping}>
-          <Icon name="stop" size={11} /> Stop
+          <Icon name="stop" size={11} /> {queued ? 'Cancel' : 'Stop'}
         </button>
       </RunHeader>
 
@@ -186,6 +219,10 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
         </div>
       )}
 
+      {queued ? (
+        <QueuedState run={run} />
+      ) : (
+        <>
       <div className="kpis" style={{ marginBottom: 12 }}>
         <Kpi
           label="Throughput"
@@ -223,12 +260,18 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
       </div>
 
       <RunCharts points={points} targetUnit={unit} xMax={total} />
+        </>
+      )}
 
       {confirmStop && (
         <ConfirmDialog
-          title="Stop this run?"
-          message="Load generation stops immediately. Partial results are kept and the run is marked as stopped."
-          confirmLabel="Stop run"
+          title={queued ? 'Cancel this run?' : 'Stop this run?'}
+          message={
+            queued
+              ? 'The run has not started yet. Launching workers is aborted and the run is marked as stopped.'
+              : 'Load generation stops immediately. Partial results are kept and the run is marked as stopped.'
+          }
+          confirmLabel={queued ? 'Cancel run' : 'Stop run'}
           busy={stopping}
           error={stopErr}
           onConfirm={stop}
@@ -236,6 +279,61 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
         />
       )}
     </>
+  );
+}
+
+/** Shown while a run is `queued` (spot workers are being launched). */
+function QueuedState({ run }: { run: Run }) {
+  const fleet = useAsync(() => api.listWorkers(), [], 4000);
+  const want = Math.max(1, run.workers || 1);
+  const remote = remoteWorkers(fleet.data ?? []);
+  // Workers already attached to this run, plus idle ones it can claim.
+  const ready = Math.min(
+    want,
+    remote.filter((w) => w.run_id === run.id || (w.state === 'idle' && !w.run_id)).length,
+  );
+  const launching = Math.max(0, want - ready);
+  return (
+    <div className="card">
+      <div className="queued-state">
+        <span className="spinner lg" />
+        <h2>Starting workers…</h2>
+        <p>
+          {launching > 0 ? (
+            <>
+              Launching <strong>{launching}</strong> spot instance{launching === 1 ? '' : 's'} for this {want}-worker run;
+              this can take a few minutes.
+            </>
+          ) : (
+            <>All {want} workers are connected; dispatching the scenario…</>
+          )}{' '}
+          Load starts automatically once every worker has registered with the master — you can leave this page open.
+        </p>
+        {fleet.data && (
+          <>
+            <div className="worker-slots" aria-label={`${ready} of ${want} workers ready`}>
+              {Array.from({ length: Math.min(want, 32) }, (_, i) => (
+                <span key={i} className={i < ready ? 'on' : ''} />
+              ))}
+            </div>
+            <div className="muted num" style={{ fontSize: 12 }}>
+              {ready} of {want} worker{want === 1 ? '' : 's'} ready
+            </div>
+          </>
+        )}
+        <div className="queued-steps">
+          <span className="queued-step done">
+            <Icon name="check" size={12} /> Run accepted
+          </span>
+          <span className="queued-step active">
+            <Icon name="cloud" size={12} /> Launching workers
+          </span>
+          <span className="queued-step">
+            <Icon name="play" size={10} /> Generating load
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -371,11 +469,7 @@ export function ResultView({ run }: { run: Run }) {
         </div>
 
         {metrics.error ? <ErrorAlert error={metrics.error} title="Metrics unavailable" /> : null}
-        <RunCharts
-          points={metrics.data ?? []}
-          targetUnit={unit}
-          xMax={undefined}
-        />
+        <RunCharts points={metrics.data ?? []} targetUnit={unit} finished />
 
         <div className="card">
           <div className="card-head">

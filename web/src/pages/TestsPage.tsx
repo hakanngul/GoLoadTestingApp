@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Test } from '../api/types';
-import { RunStartDialog } from '../components/RunStartDialog';
 import { ConfirmDialog, ErrorAlert, Icon, Loading, StatusBadge } from '../components/ui';
 import { fmtMs, fmtPct, fmtSeconds, timeAgo } from '../lib/format';
 import { useAsync, useNow } from '../lib/hooks';
 import { summarizeYaml, unitFor } from '../lib/scenario';
+
+// The dialog renders a recharts preview; load it (and recharts) on demand.
+const RunStartDialog = lazy(() => import('../components/RunStartDialog').then((m) => ({ default: m.RunStartDialog })));
 
 export function TestsPage() {
   const nav = useNavigate();
@@ -139,7 +141,11 @@ export function TestsPage() {
         )}
       </div>
 
-      {runFor && <RunStartDialog test={runFor} onClose={() => setRunFor(null)} />}
+      {runFor && (
+        <Suspense fallback={null}>
+          <RunStartDialog test={runFor} onClose={() => setRunFor(null)} />
+        </Suspense>
+      )}
       {deleting && (
         <ConfirmDialog
           title="Delete test?"
