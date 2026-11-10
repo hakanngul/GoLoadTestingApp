@@ -1,0 +1,26 @@
+# Keep the build context small and free of secrets.
+.git
+.github
+.idea
+.vscode
+**/.DS_Store
+bin/
+coverage.*
+*.prof
+*.test
+*.out
+.env
+.env.*
+
+# Rebuilt inside the image.
+web/node_modules/
+web/dist/
+
+# Not needed to build the binary.
+deploy/
+docs/
+examples/
+**/*.tfstate*
+**/.terraform/
+docker-compose*.yml
+Dockerfile

@@ -1,0 +1,64 @@
+# Login flow: a fixed pool of virtual users, each logging in with a distinct
+# account from users.csv and fetching its own profile.
+name: login-flow
+target:
+  base_url: https://api.example.test
+  timeout: 15s
+  headers:
+    Accept: application/json
+    User-Agent: GoLoadTestingApp/0.1
+load:
+  model: closed          # stage target = concurrent virtual users
+  stages:
+    - duration: 30s
+      target: 20
+    - duration: 2m
+      target: 20
+    - duration: 15s
+      target: 0
+data:
+  file: users.csv        # resolved relative to this file
+  mode: unique           # every account logs in at most once
+steps:
+  - name: login
+    method: post
+    path: /login
+    headers:
+      Content-Type: application/json
+    body: |
+      {"username": "{{username}}", "password": "{{password}}"}
+    extract:
+      - var: token
+        from: json
+        expr: data.access_token
+    assert:
+      - type: status
+        value: "200"
+      - type: json
+        expr: data.token_type
+        value: Bearer
+    think_time: 1s
+  - name: me
+    path: /me
+    headers:
+      Authorization: Bearer {{token}}
+    assert:
+      - type: status
+        value: "200"
+      - type: json
+        expr: id
+        op: gt
+        value: "0"
+      - type: body_contains
+        value: '"email"'
+    think_time: 2s
+thresholds:
+  - metric: latency.p95
+    op: lt
+    value: 800
+  - metric: latency.p99
+    op: lt
+    value: 1500
+  - metric: error_rate
+    op: lte
+    value: 0.02

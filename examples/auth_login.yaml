@@ -1,0 +1,59 @@
+# Authenticated load without logging in on every iteration: each account
+# from users.csv logs in once (per load generator), the token is cached for
+# 15 minutes and sent as "Authorization: Bearer <token>" on every step.
+# Logins show up in the report as step "auth:login".
+name: auth-login
+target:
+  base_url: https://api.example.test
+  timeout: 15s
+  headers:
+    Accept: application/json
+load:
+  model: closed          # stage target = concurrent virtual users
+  stages:
+    - duration: 30s
+      target: 20
+    - duration: 5m
+      target: 20
+    - duration: 15s
+      target: 0
+data:
+  file: users.csv        # columns: username, password
+  mode: sequential
+auth:
+  type: login
+  scope: per_user        # one login per distinct username/password
+  refresh: 15m           # log in again once the token is this old
+  login:                 # method defaults to POST for auth.login
+    path: /login
+    headers:
+      Content-Type: application/json
+    body: '{"username": "{{username}}", "password": "{{password}}"}'
+    extract:
+      - var: token
+        from: json
+        expr: data.access_token
+  # header: Authorization       (default)
+  # value: Bearer {{token}}     (default)
+steps:
+  - name: me
+    path: /me            # gets Authorization: Bearer {{token}} injected
+    assert:
+      - type: status
+        value: "200"
+    think_time: 1s
+  - name: orders
+    path: /orders?limit=20
+    assert:
+      - type: status
+        value: "200"
+      - type: body_contains
+        value: '"items"'
+    think_time: 2s
+thresholds:
+  - metric: latency.p95
+    op: lt
+    value: 800
+  - metric: error_rate
+    op: lte
+    value: 0.01

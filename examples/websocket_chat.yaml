@@ -1,0 +1,61 @@
+# WebSocket chat: virtual users log in over HTTP, open a WebSocket with the
+# returned token, join a room, and keep the connection open with periodic
+# application-level pings. Each held connection is one closed-model VU.
+#
+# Reported per iteration:
+#   login        HTTP request latency
+#   chat         WebSocket handshake latency
+#   chat:1       join -> "joined" round trip
+#   chat:hold    only if the server drops the connection early (failure)
+name: websocket-chat
+target:
+  base_url: https://chat.example.test   # ws steps use wss:// on this host
+  timeout: 10s
+  headers:
+    User-Agent: GoLoadTestingApp/0.1
+load:
+  model: closed          # stage target = concurrent virtual users = open connections
+  stages:
+    - duration: 30s
+      target: 200        # ramp up to 200 connections
+    - duration: 1m
+      target: 200
+    - duration: 10s
+      target: 0
+data:
+  file: users.csv
+  mode: sequential
+steps:
+  - name: login
+    method: post
+    path: /login
+    headers:
+      Content-Type: application/json
+    body: |
+      {"username": "{{username}}", "password": "{{password}}"}
+    extract:
+      - var: token
+        from: json
+        expr: data.access_token
+    assert:
+      - type: status
+        value: "200"
+  - name: chat
+    type: ws
+    path: /ws?token={{token}}
+    ws:
+      messages:
+        - send: '{"type":"join","room":"lobby","user":"{{username}}"}'
+          expect: '"joined"'
+          timeout: 5s
+      hold: 20s          # keep the connection open; not counted as latency
+      ping_every: 5s
+      ping_message: '{"type":"ping"}'
+    think_time: 1s
+thresholds:
+  - metric: latency.p95
+    op: lt
+    value: 500
+  - metric: error_rate
+    op: lte
+    value: 0.01

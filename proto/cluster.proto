@@ -1,0 +1,112 @@
+// Master <-> worker protocol (Phase 4).
+//
+// Workers dial the master and keep one bidirectional stream open. This
+// suits spot instances: workers need no inbound ports and the master learns
+// about them as they connect.
+syntax = "proto3";
+
+package goload.cluster.v1;
+
+option go_package = "github.com/hakanngul/GoLoadTestingApp/internal/cluster/pb";
+
+service Coordinator {
+  rpc Connect(stream WorkerMessage) returns (stream MasterMessage);
+}
+
+// ---- worker -> master ----
+
+message WorkerMessage {
+  oneof msg {
+    Hello hello = 1;
+    Heartbeat heartbeat = 2;
+    MetricReport metric = 3;
+    ErrorSamples errors = 4;
+    RunFinished finished = 5;
+  }
+}
+
+// First message on every stream.
+message Hello {
+  string worker_id = 1;   // stable per process (hostname + random suffix)
+  string version = 2;
+  int32 cpus = 3;
+  string addr = 4;        // informational (e.g. private IP)
+}
+
+// Sent every second while connected; liveness for the master.
+message Heartbeat {
+  double cpu = 1;         // 0..1
+  int64 active = 2;       // in-flight iterations
+  string run_id = 3;      // empty when idle
+}
+
+// One per second per run: an interval metrics.Snapshot (HDR histograms,
+// metrics.Snapshot.MarshalBinary) so the master can merge exactly.
+message MetricReport {
+  string run_id = 1;
+  int64 second = 2;       // 1-based second index since StartRun.start_at
+  double target = 3;      // this worker's share of the target
+  int64 active = 4;
+  double cpu = 5;
+  bytes snapshot = 6;
+  // Error groups of this worker for this second (delta counts; every
+  // failure, not just the sampled ones). At most MaxErrorGroups entries
+  // plus one overflow entry (step "", status 0, message "(other errors)").
+  repeated ErrorCount error_counts = 7;
+}
+
+// Failed requests with the same step, status and normalized message
+// (message cut to 300 runes) counted during one second on one worker.
+message ErrorCount {
+  string step = 1;
+  int32 status = 2;
+  string message = 3;
+  int64 count = 4;
+  int64 first_unix_nano = 5;
+  int64 last_unix_nano = 6;
+  // First raw (not normalized) message of the group, cut to 300 runes.
+  // Empty from workers that predate normalization; the master then
+  // normalizes message itself and uses it as the sample.
+  string sample = 7;
+}
+
+message ErrorSample {
+  int64 t_unix_nano = 1;
+  string step = 2;
+  int32 status = 3;
+  string message = 4;
+}
+
+message ErrorSamples {
+  string run_id = 1;
+  repeated ErrorSample samples = 2;
+}
+
+message RunFinished {
+  string run_id = 1;
+  string error = 2;          // empty on normal completion / stop
+  bool data_exhausted = 3;
+}
+
+// ---- master -> worker ----
+
+message MasterMessage {
+  oneof msg {
+    StartRun start = 1;
+    StopRun stop = 2;
+  }
+}
+
+message StartRun {
+  string run_id = 1;
+  string scenario_yaml = 2;        // full scenario; worker scales load itself
+  map<string, bytes> files = 3;    // data files by name
+  int32 worker_index = 4;          // 0..worker_count-1
+  int32 worker_count = 5;
+  int64 start_at_unix_nano = 6;    // synchronized start
+  int32 max_error_samples = 7;
+}
+
+message StopRun {
+  string run_id = 1;
+}

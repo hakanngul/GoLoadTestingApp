@@ -1,0 +1,64 @@
+#!/bin/bash
+# goload worker bootstrap for MANUAL launches from the launch template.
+# Workers started by the master use the equivalent script generated in
+# internal/provision/userdata.go (RunInstances user data replaces this one);
+# keep both in sync. Reads master address and token from SSM.
+set -euo pipefail
+
+REGION="${region}"
+
+# --- hard lifetime safety net (instance-initiated shutdown = terminate)
+shutdown -h +360 "goload worker max lifetime reached" || true
+
+# --- kernel tuning for many concurrent outbound connections
+cat > /etc/sysctl.d/99-goload.conf <<'SYSCTL'
+fs.file-max = 2097152
+fs.nr_open = 2097152
+net.ipv4.ip_local_port_range = 1024 65535
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+SYSCTL
+sysctl --system >/dev/null
+ulimit -n 1048576 || true
+cat > /etc/security/limits.d/99-goload.conf <<'LIMITS'
+*    soft nofile 1048576
+*    hard nofile 1048576
+root soft nofile 1048576
+root hard nofile 1048576
+LIMITS
+
+# --- Docker
+dnf install -y docker
+mkdir -p /etc/systemd/system/docker.service.d
+cat > /etc/systemd/system/docker.service.d/limits.conf <<'UNIT'
+[Service]
+LimitNOFILE=1048576
+UNIT
+systemctl daemon-reload
+systemctl enable --now docker
+
+%{ if ecr_registry != "" ~}
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "${ecr_registry}"
+%{ endif ~}
+
+param() {
+  aws ssm get-parameter --region "$REGION" --with-decryption --name "$1" --query Parameter.Value --output text
+}
+MASTER_ADDR=$(param '${master_addr_param}')
+
+install -d -m 0700 /etc/goload
+umask 077
+echo "GOLOAD_WORKER_TOKEN=$(param '${token_param}')" > /etc/goload/worker.env
+echo "GOLOAD_RUN_ID=manual" >> /etc/goload/worker.env
+chmod 0600 /etc/goload/worker.env
+
+docker pull "${image}"
+docker run -d --name goload-worker \
+  --restart on-failure:5 \
+  --network host \
+  --ulimit nofile=1048576:1048576 \
+  --env-file /etc/goload/worker.env \
+  "${image}" worker -master "$MASTER_ADDR"

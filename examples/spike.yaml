@@ -1,0 +1,46 @@
+# Spike test: establish a baseline, hit the API with a sudden 10x burst,
+# then verify it recovers once the burst subsides.
+name: spike
+target:
+  base_url: https://api.example.test
+  timeout: 5s
+load:
+  model: open            # stage target = iterations per second
+  stages:
+    - duration: 30s      # ramp 0 -> 50 it/s
+      target: 50
+    - duration: 1m       # baseline hold
+      target: 50
+    - duration: 2s       # near-instant jump to the spike
+      target: 500
+    - duration: 10s      # spike hold
+      target: 500
+    - duration: 2s       # drop back
+      target: 50
+    - duration: 1m       # recovery at baseline
+      target: 50
+    - duration: 10s      # ramp down
+      target: 0
+  max_vus: 2000          # arrivals beyond this are dropped and counted
+steps:
+  - name: search
+    path: /search?q=shoes
+    assert:
+      - type: status
+        op: lt
+        value: "500"
+  - name: product detail
+    path: /products/42
+    assert:
+      - type: status
+        value: "200"
+thresholds:
+  - metric: latency.p99
+    op: lt
+    value: 2000
+  - metric: error_rate
+    op: lt
+    value: 0.05
+  - metric: rps
+    op: gte
+    value: 40
