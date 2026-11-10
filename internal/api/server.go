@@ -58,6 +58,7 @@ type server struct {
 	store     store.Store
 	runner    runner.Runner
 	ui        fs.FS
+	uiFiles   map[string]string // regular files in ui, by path (see uiFileSet)
 	version   string
 	log       *slog.Logger
 	authToken string
@@ -87,6 +88,7 @@ func newServer(cfg Config) *server {
 		store:     cfg.Store,
 		runner:    cfg.Runner,
 		ui:        cfg.UI,
+		uiFiles:   uiFileSet(cfg.UI),
 		version:   cfg.Version,
 		log:       log,
 		authToken: cfg.AuthToken,

@@ -226,31 +226,28 @@ type sqliteQuerier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// sqliteRunColumns lists the runs columns in the order sqliteRunRow scans.
-var sqliteRunColumns = []string{"id", "test_id", "test_name", "status", "yaml", "workers",
-	"started_at", "finished_at", "summary", "thresholds", "peak_cpu", "warnings", "error",
-	"label", "notes"}
-
-// sqliteRunCols returns the run columns, qualified with alias unless it is
-// empty (RETURNING only accepts bare column names).
-func sqliteRunCols(alias string) string {
-	cols := make([]string, len(sqliteRunColumns))
-	for i, c := range sqliteRunColumns {
-		if alias != "" {
-			c = alias + "." + c
-		}
-		cols[i] = c
-	}
-	return strings.Join(cols, ", ")
-}
-
-// sqliteRunColsSlim is sqliteRunCols with the summary's by_step removed
-// (RunsSince).
-func sqliteRunColsSlim(alias string) string {
-	sum := alias + ".summary"
-	return strings.Replace(sqliteRunCols(alias), sum+",",
-		"CASE WHEN json_type("+sum+") = 'object' THEN json_remove("+sum+", '$.by_step') ELSE "+sum+" END,", 1)
-}
+// The runs columns in the order sqliteRunRow scans, as constants so every
+// query built from them is a constant too. sqliteRunColsBare is unqualified
+// (RETURNING only accepts bare column names); the others are qualified with
+// the alias in their name.
+const (
+	sqliteRunColsBare = `id, test_id, test_name, status, yaml, workers,
+	started_at, finished_at, summary, thresholds, peak_cpu, warnings, error,
+	label, notes`
+	sqliteRunColsR = `r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
+	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
+	r.label, r.notes`
+	sqliteRunColsLR = `lr.id, lr.test_id, lr.test_name, lr.status, lr.yaml, lr.workers,
+	lr.started_at, lr.finished_at, lr.summary, lr.thresholds, lr.peak_cpu, lr.warnings, lr.error,
+	lr.label, lr.notes`
+	// sqliteRunColsSlimR is sqliteRunColsR with the summary's by_step
+	// removed (RunsSince).
+	sqliteRunColsSlimR = `r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
+	r.started_at, r.finished_at,
+	CASE WHEN json_type(r.summary) = 'object' THEN json_remove(r.summary, '$.by_step') ELSE r.summary END,
+	r.thresholds, r.peak_cpu, r.warnings, r.error,
+	r.label, r.notes`
+)
 
 // sqliteRunRow receives one runs row. Every field is nullable so the same
 // type serves the LEFT JOIN in ListTests.
@@ -375,16 +372,19 @@ func (r *sqliteTestRow) test() (model.Test, error) {
 
 // ---- tests -----------------------------------------------------------------
 
-// ListTests returns all tests, most recently updated first, each with its
-// files and newest run, in a single query.
-func (s *SQLite) ListTests(ctx context.Context) ([]model.Test, error) {
-	rows, err := s.r.QueryContext(ctx, `
-		SELECT `+sqliteTestCols+`, `+sqliteRunCols("lr")+`
+// sqliteListTestsSQL selects every test with its newest run (ListTests).
+const sqliteListTestsSQL = `
+		SELECT ` + sqliteTestCols + `, ` + sqliteRunColsLR + `
 		FROM tests t
 		LEFT JOIN runs lr ON lr.id = (
 			SELECT r.id FROM runs r WHERE r.test_id = t.id
 			ORDER BY r.started_at DESC, r.id DESC LIMIT 1)
-		ORDER BY t.updated_at DESC, t.id DESC`)
+		ORDER BY t.updated_at DESC, t.id DESC`
+
+// ListTests returns all tests, most recently updated first, each with its
+// files and newest run, in a single query.
+func (s *SQLite) ListTests(ctx context.Context) ([]model.Test, error) {
+	rows, err := s.r.QueryContext(ctx, sqliteListTestsSQL)
 	if err != nil {
 		return nil, sqliteErr(err)
 	}
@@ -574,6 +574,15 @@ func sqliteRunArgs(r model.Run) ([]any, error) {
 		summary, string(tj), r.PeakCPU, string(wj), r.Error}, nil
 }
 
+// sqliteCreateRunSQL inserts a run for an existing test (CreateRun).
+const sqliteCreateRunSQL = `
+		INSERT INTO runs (id, test_id, test_name, status, yaml, workers, started_at, finished_at,
+		                  summary, thresholds, peak_cpu, warnings, error, label, notes)
+		SELECT ?, t.id, COALESCE(NULLIF(?, ''), t.name), COALESCE(NULLIF(?, ''), 'queued'),
+		       ?, ?, COALESCE(?, ?), ?, ?, ?, ?, ?, ?, ?, ?
+		FROM tests t WHERE t.id = ?
+		RETURNING ` + sqliteRunColsBare
+
 // CreateRun stores a new run for an existing test. The store assigns the
 // ID; StartedAt defaults to now, Status to queued and TestName to the
 // test's current name. An unknown test yields ErrNotFound.
@@ -586,13 +595,7 @@ func (s *SQLite) CreateRun(ctx context.Context, r model.Run) (model.Run, error) 
 		return model.Run{}, err
 	}
 	var rr sqliteRunRow
-	err = s.w.QueryRowContext(ctx, `
-		INSERT INTO runs (id, test_id, test_name, status, yaml, workers, started_at, finished_at,
-		                  summary, thresholds, peak_cpu, warnings, error, label, notes)
-		SELECT ?, t.id, COALESCE(NULLIF(?, ''), t.name), COALESCE(NULLIF(?, ''), 'queued'),
-		       ?, ?, COALESCE(?, ?), ?, ?, ?, ?, ?, ?, ?, ?
-		FROM tests t WHERE t.id = ?
-		RETURNING `+sqliteRunCols(""),
+	err = s.w.QueryRowContext(ctx, sqliteCreateRunSQL,
 		newID(), a[0], a[1], a[2], a[3], a[4], toMicros(now()), a[5], a[6], a[7], a[8], a[9], a[10],
 		r.Label, r.Notes, r.TestID).Scan(rr.dest()...)
 	if err != nil {
@@ -619,13 +622,26 @@ func (s *SQLite) UpdateRun(ctx context.Context, r model.Run) error {
 		WHERE id = ?`, append(a, r.ID)...)
 }
 
+// Run queries (GetRun, ListRuns, UpdateRunMeta, RunsSince).
+const (
+	sqliteGetRunSQL   = `SELECT ` + sqliteRunColsR + ` FROM runs r WHERE r.id = ?`
+	sqliteListRunsSQL = `SELECT ` + sqliteRunColsR + ` FROM runs r
+			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`
+	sqliteListTestRunsSQL = `SELECT ` + sqliteRunColsR + ` FROM runs r WHERE r.test_id = ?
+			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`
+	sqliteUpdateRunMetaSQL = `UPDATE runs SET label = COALESCE(?, label), notes = COALESCE(?, notes)
+		WHERE id = ? RETURNING ` + sqliteRunColsBare
+	sqliteRunsSinceSQL = `SELECT ` + sqliteRunColsSlimR + ` FROM runs r WHERE r.started_at >= ?
+		ORDER BY r.started_at DESC, r.id DESC`
+)
+
 // GetRun returns one run.
 func (s *SQLite) GetRun(ctx context.Context, id string) (model.Run, error) {
 	if !isUUID(id) {
 		return model.Run{}, ErrNotFound
 	}
 	var rr sqliteRunRow
-	if err := s.r.QueryRowContext(ctx, `SELECT `+sqliteRunCols("r")+` FROM runs r WHERE r.id = ?`, id).
+	if err := s.r.QueryRowContext(ctx, sqliteGetRunSQL, id).
 		Scan(rr.dest()...); err != nil {
 		return model.Run{}, sqliteErr(err)
 	}
@@ -646,13 +662,11 @@ func (s *SQLite) ListRuns(ctx context.Context, f RunFilter) ([]model.Run, error)
 	)
 	switch {
 	case f.TestID == "":
-		rows, err = s.r.QueryContext(ctx, `SELECT `+sqliteRunCols("r")+` FROM runs r
-			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`, limit)
+		rows, err = s.r.QueryContext(ctx, sqliteListRunsSQL, limit)
 	case !isUUID(f.TestID):
 		return []model.Run{}, nil
 	default:
-		rows, err = s.r.QueryContext(ctx, `SELECT `+sqliteRunCols("r")+` FROM runs r WHERE r.test_id = ?
-			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`, f.TestID, limit)
+		rows, err = s.r.QueryContext(ctx, sqliteListTestRunsSQL, f.TestID, limit)
 	}
 	if err != nil {
 		return nil, sqliteErr(err)
@@ -681,8 +695,7 @@ func (s *SQLite) UpdateRunMeta(ctx context.Context, id string, label, notes *str
 		return model.Run{}, ErrNotFound
 	}
 	var rr sqliteRunRow
-	err := s.w.QueryRowContext(ctx, `UPDATE runs SET label = COALESCE(?, label), notes = COALESCE(?, notes)
-		WHERE id = ? RETURNING `+sqliteRunCols(""), label, notes, id).Scan(rr.dest()...)
+	err := s.w.QueryRowContext(ctx, sqliteUpdateRunMetaSQL, label, notes, id).Scan(rr.dest()...)
 	if err != nil {
 		return model.Run{}, sqliteErr(err)
 	}
@@ -740,8 +753,7 @@ func (s *SQLite) SetBaseline(ctx context.Context, testID, runID string) (model.T
 // RunsSince returns runs started at or after since, newest first, with
 // summaries stripped of by_step.
 func (s *SQLite) RunsSince(ctx context.Context, since time.Time) ([]model.Run, error) {
-	rows, err := s.r.QueryContext(ctx, `SELECT `+sqliteRunColsSlim("r")+` FROM runs r WHERE r.started_at >= ?
-		ORDER BY r.started_at DESC, r.id DESC`, toMicros(since))
+	rows, err := s.r.QueryContext(ctx, sqliteRunsSinceSQL, toMicros(since))
 	if err != nil {
 		return nil, sqliteErr(err)
 	}

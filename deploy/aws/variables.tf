@@ -85,6 +85,12 @@ variable "master_public_ip" {
   default     = true
 }
 
+variable "master_associate_public_ip" {
+  description = "Give the master an automatically assigned public IPv4 address at launch. null (default) follows the master subnet's auto-assign setting. The master needs outbound internet (image pulls, SSM, AWS APIs): set false only in a private subnet with a NAT gateway (or VPC endpoints). Independent of master_public_ip (Elastic IP). Changing it replaces the master instance."
+  type        = bool
+  default     = null
+}
+
 variable "master_termination_protection" {
   description = "Protect the master (and its SQLite database) against accidental termination."
   type        = bool

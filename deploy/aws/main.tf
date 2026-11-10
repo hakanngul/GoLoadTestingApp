@@ -448,13 +448,14 @@ resource "aws_launch_template" "worker" {
 # ---------------------------------------------------------------------------
 
 resource "aws_instance" "master" {
-  ami                     = local.ami_id
-  instance_type           = var.master_instance_type
-  subnet_id               = data.aws_subnet.master.id
-  vpc_security_group_ids  = [aws_security_group.master.id]
-  iam_instance_profile    = aws_iam_instance_profile.master.name
-  disable_api_termination = var.master_termination_protection
-  monitoring              = false
+  ami                         = local.ami_id
+  instance_type               = var.master_instance_type
+  subnet_id                   = data.aws_subnet.master.id
+  associate_public_ip_address = var.master_associate_public_ip
+  vpc_security_group_ids      = [aws_security_group.master.id]
+  iam_instance_profile        = aws_iam_instance_profile.master.name
+  disable_api_termination     = var.master_termination_protection
+  monitoring                  = false
 
   metadata_options {
     http_endpoint               = "enabled"
