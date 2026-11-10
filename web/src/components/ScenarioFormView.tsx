@@ -125,6 +125,35 @@ export function ScenarioFormView({
               Skip TLS certificate verification
             </label>
           </div>
+          <div className="span-12">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={form.target.cookies}
+                onChange={(e) => mutate((f) => void (f.target.cookies = e.target.checked))}
+              />
+              Keep cookies per virtual user
+            </label>
+            <div className="hint">
+              Like a browser, Locust or JMeter: cookies a response sets are sent back on later requests. VU model: one
+              cookie jar per virtual user for the whole run. Arrival-rate model: every iteration starts as a new visitor
+              without cookies.
+            </div>
+          </div>
+          <div className="span-12">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={form.target.follow_redirects}
+                onChange={(e) => mutate((f) => void (f.target.follow_redirects = e.target.checked))}
+              />
+              Follow redirects
+            </label>
+            <div className="hint">
+              A step reports the final response; its latency covers the whole redirect chain. Turn off to measure or
+              assert a 3xx itself (a single step can override this in YAML with <code>follow_redirects</code>).
+            </div>
+          </div>
         </div>
       </Section>
 

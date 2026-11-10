@@ -1135,7 +1135,9 @@ function tryScenario(yaml) {
   const login = /^auth:[\s\S]*?type:\s*login/m.test(clean);
   const host = url.hostname;
   const redirects = !host.startsWith('www.') && !/^(localhost|[\d.]+|.*\.test|.*\.local)$/.test(host);
-  const reqHeaders = (extra = []) => [{ name: 'User-Agent', value: 'Go-http-client/2.0' }, ...extra];
+  const reqHeaders = (extra = []) => [{ name: 'User-Agent', value: 'GoLoad/dev' }, ...extra];
+  // Like the real server: redirects are followed and cookies kept by default.
+  const follow = !/^\s*follow_redirects:\s*false/m.test(clean);
   const out = [];
   let failed = false;
   const all = login
@@ -1163,8 +1165,13 @@ function tryScenario(yaml) {
     step.duration_ms = Math.round(dur * 10) / 10;
     step.request_headers = reqHeaders(login && s.index >= 0 ? [{ name: 'Authorization', value: 'Bearer eyJh… (164 chars)' }] : []);
     if (s.method !== 'GET') step.request_headers.push({ name: 'Content-Type', value: 'application/json' });
-    if (redirects && i === 0) {
-      const loc = `https://www.${host}:443${s.path}`;
+    const loc = `https://www.${host}:443${s.path}`;
+    if (redirects && i === 0 && follow) {
+      // The 301 is followed; the step reports the final response.
+      step.redirects = [{ status: 301, method: s.method, url: base + s.path, location: loc }];
+      step.final_url = loc;
+    }
+    if (redirects && i === 0 && !follow) {
       Object.assign(step, {
         state: 'failed',
         status: 301,
@@ -1207,10 +1214,13 @@ function tryScenario(yaml) {
   const hints = [];
   if (redirects) {
     const nb = `https://www.${host}${url.pathname.replace(/\/+$/, '')}`;
+    const to = `https://www.${host}:443${all[0]?.path ?? '/'}`;
     hints.push({
-      level: 'error',
+      level: follow ? 'warning' : 'error',
       step: all[0]?.name,
-      message: `The response is a 301 redirect to https://www.${host}:443${all[0]?.path ?? '/'}. GoLoad does not follow redirects, so every request of a run would measure this 301 instead of the real page. The site moved to another host or scheme: set target.base_url to ${nb}.`,
+      message: follow
+        ? `The request was redirected (301) to ${to} and GoLoad followed it. Every request of a run would make this extra hop and measure both requests. The site moved to another host or scheme: set target.base_url to ${nb}.`
+        : `The response is a 301 redirect to ${to}. follow_redirects is false for this step, so a run measures this 301 instead of the page behind it. The site moved to another host or scheme: set target.base_url to ${nb}.`,
       fix: { kind: 'base_url', step: -1, value: nb, label: `Set base_url to ${nb}` },
     });
   }

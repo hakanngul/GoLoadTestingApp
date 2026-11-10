@@ -113,6 +113,7 @@ func TestRedirectToOtherHostSuggestsBaseURL(t *testing.T) {
 steps:
   - name: home
     path: /moved
+    follow_redirects: false   # the target host does not exist
     assert: [{type: status, value: "200"}]
   - name: next
     path: /items?open=1
@@ -148,13 +149,28 @@ func TestRedirectSamePathSuggestsPath(t *testing.T) {
 	srv, _ := target(t)
 	sc := parse(t, srv.URL, "steps:\n  - {name: s, path: /slash}\n")
 	res := Run(context.Background(), sc, Options{})
-	// No status assertion: the 301 passes, but the hint warns.
-	if !res.OK {
+	// The 301 is followed (to a 404 here); the hint proposes the final
+	// path, which would save the extra hop.
+	st := res.Steps[0]
+	if st.Status != 404 || len(st.Redirects) != 1 || st.Redirects[0].Status != 301 ||
+		st.Redirects[0].Location != srv.URL+"/slash/" || st.FinalURL != srv.URL+"/slash/" {
+		t.Fatalf("step = %+v", st)
+	}
+	hs := hintsWith(res, "redirected")
+	if len(hs) != 1 || hs[0].Level != "info" || hs[0].Fix == nil ||
+		hs[0].Fix.Kind != "step_path" || hs[0].Fix.Value != "/slash/" || hs[0].Fix.Step != 0 {
+		t.Fatalf("hints = %+v", res.Hints)
+	}
+
+	// follow_redirects: false: the 301 passes (no status assertion) and
+	// the hint is informational.
+	sc = parse(t, srv.URL, "steps:\n  - {name: s, path: /slash, follow_redirects: false}\n")
+	res = Run(context.Background(), sc, Options{})
+	if !res.OK || res.Steps[0].Status != 301 {
 		t.Fatalf("states = %s", states(res))
 	}
-	hs := hintsWith(res, "redirect")
-	if len(hs) != 1 || hs[0].Level != "warning" || hs[0].Fix == nil ||
-		hs[0].Fix.Kind != "step_path" || hs[0].Fix.Value != "/slash/" || hs[0].Fix.Step != 0 {
+	hs = hintsWith(res, "follow_redirects is false")
+	if len(hs) != 1 || hs[0].Level != "info" || hs[0].Fix == nil || hs[0].Fix.Value != "/slash/" {
 		t.Fatalf("hints = %+v", res.Hints)
 	}
 }

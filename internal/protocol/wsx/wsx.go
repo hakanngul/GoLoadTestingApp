@@ -54,6 +54,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -107,6 +108,12 @@ type Executor struct {
 
 	checkURL func(string) error
 	trace    func(string, string, http.Header)
+
+	// cookies: handshakes send the cookies of the virtual user's
+	// protocol.Session and store the ones the handshake response sets
+	// (target.cookies, default on), so a session cookie obtained over
+	// HTTP authenticates the WebSocket as in a browser.
+	cookies bool
 }
 
 var _ protocol.Executor = (*Executor)(nil)
@@ -177,6 +184,7 @@ func New(sc *scenario.Scenario, opts Options) (*Executor, error) {
 
 		checkURL: opts.CheckURL,
 		trace:    opts.Trace,
+		cookies:  sc.Target.CookiesEnabled(),
 	}
 	if e.timeout <= 0 {
 		e.timeout = DefaultTimeout
@@ -269,6 +277,9 @@ func (e *Executor) compileStep(s *scenario.Step, targetHeaders map[string]string
 	for k, v := range s.Headers {
 		merged[http.CanonicalHeaderKey(k)] = v
 	}
+	if _, ok := merged["User-Agent"]; !ok {
+		merged["User-Agent"] = protocol.UserAgent()
+	}
 	for k, v := range merged {
 		if k == "Host" {
 			st.host, st.hostTmpl = v, strings.Contains(v, "{{")
@@ -346,6 +357,9 @@ func (e *Executor) NumSteps() int { return len(e.steps) }
 
 // Iterate implements protocol.Executor for scenarios made only of ws steps.
 func (e *Executor) Iterate(ctx context.Context, vars map[string]string, intended time.Time, sink func(protocol.Result)) {
+	if e.cookies {
+		ctx, _ = protocol.EnsureSession(ctx) // open model: a new visitor
+	}
 	for i := range e.steps {
 		if ctx.Err() != nil {
 			return
@@ -469,6 +483,26 @@ func (e *Executor) connect(ctx context.Context, st *step, vars map[string]string
 		}
 	}
 
+	// Cookies of the virtual user's session, merged with an explicit
+	// Cookie header (which wins on a name clash).
+	var (
+		sess      *protocol.Session
+		cookieURL *url.URL
+	)
+	if e.cookies {
+		if sess = protocol.SessionFrom(ctx); sess != nil {
+			if u, err := url.Parse(target); err == nil {
+				cookieURL = u
+				if v := sess.CookieHeader(u, opts.HTTPHeader.Get("Cookie")); v != "" {
+					if opts.HTTPHeader == nil {
+						opts.HTTPHeader = make(http.Header, 1)
+					}
+					opts.HTTPHeader["Cookie"] = []string{v}
+				}
+			}
+		}
+	}
+
 	if e.trace != nil {
 		e.trace(st.name, target, opts.HTTPHeader.Clone())
 	}
@@ -484,6 +518,9 @@ func (e *Executor) connect(ctx context.Context, st *step, vars map[string]string
 	defer cancel()
 	c, resp, err := websocket.Dial(dctx, target, opts)
 	res.Latency = time.Since(start)
+	if resp != nil && cookieURL != nil {
+		sess.StoreResponse(cookieURL, resp.Header)
+	}
 	if err != nil {
 		if resp != nil {
 			res.Status = resp.StatusCode

@@ -28,6 +28,22 @@ export function applyFix(form: ScenarioForm, fix: TryFix): ScenarioForm | null {
   return null;
 }
 
+/** One line per followed redirect: "302 GET /a → /b", shortened to paths on the first request's origin. */
+export function redirectLines(s: TryStep): { status: number; text: string; cookies: string[] }[] {
+  const origin = originOf(s.url ?? '');
+  const short = (u: string) => (origin && u.startsWith(origin) ? u.slice(origin.length) || '/' : u);
+  return (s.redirects ?? []).map((h) => ({
+    status: h.status,
+    text: `${h.method} ${short(h.url)} → ${short(h.location)}`,
+    cookies: h.cookies_set ?? [],
+  }));
+}
+
+function originOf(u: string): string {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]+/i.exec(u);
+  return m ? m[0] : '';
+}
+
 export type BadgeTone = 'good' | 'bad' | 'warn' | 'info' | '';
 
 /** Badge text and tone for a step row. */

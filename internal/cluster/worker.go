@@ -30,6 +30,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/executor"
+	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/httpx"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 )
 
@@ -64,6 +65,12 @@ type WorkerOptions struct {
 	Version string
 	// Logger defaults to slog.Default().
 	Logger *slog.Logger
+	// Allow vets redirect hops that leave the host of the request being
+	// redirected (a target allowlist, `worker -allow-targets`). The
+	// master's allowlist is not sent to workers, so with Allow nil a
+	// worker follows redirects only to the scenario's own target hosts,
+	// which the master vetted before starting the run.
+	Allow func(rawURL string) error
 	// DialOptions are appended after the defaults (tests: bufconn dialer,
 	// or custom transport credentials, which override the defaults).
 	DialOptions []grpc.DialOption
@@ -351,7 +358,10 @@ func (s *session) execute(ctx context.Context, r *workerRun, msg *pb.StartRun) *
 	if err != nil {
 		return fail(err)
 	}
-	exec, closeExec, err := executor.New(sc, executor.Options{})
+	exec, closeExec, err := executor.New(sc, executor.Options{HTTP: httpx.Options{
+		CheckRedirect:     s.w.opts.Allow,
+		RestrictRedirects: s.w.opts.Allow == nil,
+	}})
 	if err != nil {
 		return fail(err)
 	}

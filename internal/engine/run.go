@@ -110,7 +110,10 @@ func (r *runState) err() error {
 // iterate runs a single iteration: fetch a fresh row, then call the
 // executor. It reports false if the feeder failed, in which case the error
 // is recorded and scheduling is stopped.
-func (r *runState) iterate(intended time.Time) bool {
+//
+// ctx is r.iterCtx, or a context derived from it that carries the virtual
+// user's protocol.Session (closed model).
+func (r *runState) iterate(ctx context.Context, intended time.Time) bool {
 	row, err := r.e.opts.Feeder.Next()
 	if err != nil {
 		r.mu.Lock()
@@ -127,7 +130,7 @@ func (r *runState) iterate(intended time.Time) bool {
 	for k, v := range row {
 		vars[k] = v
 	}
-	r.e.opts.Executor.Iterate(r.iterCtx, vars, intended, r.sink)
+	r.e.opts.Executor.Iterate(ctx, vars, intended, r.sink)
 	return true
 }
 

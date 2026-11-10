@@ -10,6 +10,7 @@
 // Pure module (no React/DOM) so `node --test` can exercise it directly.
 import {
   defaultForm,
+  defaultTarget,
   emptyAuth,
   emptyStep,
   emptyWS,
@@ -217,17 +218,18 @@ function isContentTypeJson(kv: KV): boolean {
 
 /**
  * Builds the full form for a Quick test. Settings Quick mode does not show
- * (timeout, TLS verification, max_vus) are carried over from base.
+ * (timeout, TLS verification, cookies, redirects, max_vus) are carried over
+ * from base; a new Quick test gets the defaults (cookies kept per virtual
+ * user, redirects followed).
  */
 export function quickToForm(q: QuickForm, base?: ScenarioForm | null): ScenarioForm {
   const f = defaultForm();
   const { base: baseUrl, path } = splitUrl(q.url, base?.target.base_url ?? '');
   f.name = q.name;
   f.target = {
+    ...(base ? base.target : defaultTarget()),
     base_url: baseUrl,
     headers: q.headers.map((h) => ({ ...h })),
-    timeout: base ? base.target.timeout : '',
-    insecure_skip_verify: base ? base.target.insecure_skip_verify : false,
   };
 
   const T = q.target.trim();
@@ -321,6 +323,7 @@ export function formToQuick(f: ScenarioForm): QuickOutcome {
       else q.method = s.method as QuickMethod;
       if (s.extract.length) reasons.push('The step extracts variables');
       if (s.think_time.trim()) reasons.push('The step has a think time');
+      if (s.follow_redirects !== undefined) reasons.push('The step sets follow_redirects');
       const extraHeaders = s.headers.filter((h) => !(isContentTypeJson(h) && s.body.trim() !== ''));
       if (extraHeaders.length) reasons.push('The step sets its own headers');
       if (!/^\//.test(s.path)) reasons.push('The step path is not a plain /path');

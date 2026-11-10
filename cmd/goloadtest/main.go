@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/hakanngul/GoLoadTestingApp/internal/protocol"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -28,6 +30,7 @@ const (
 )
 
 func main() {
+	protocol.SetVersion(version) // default User-Agent: GoLoad/<version>
 	os.Exit(dispatch(os.Args[1:], os.Stdout, os.Stderr))
 }
 

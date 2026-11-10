@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/allowlist"
 	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
 )
 
@@ -22,12 +23,22 @@ func cmdWorker(args []string, stdout, stderr io.Writer) int {
 	token := flags.String("token", os.Getenv("GOLOAD_WORKER_TOKEN"), "worker token (prefer GOLOAD_WORKER_TOKEN; flags show up in ps)")
 	insecure := flags.Bool("insecure", true, "plaintext gRPC (inside a private network); false requires TLS")
 	id := flags.String("id", os.Getenv("GOLOAD_WORKER_ID"), "worker id (default: hostname + random suffix)")
+	allowTargets := flags.String("allow-targets", os.Getenv("GOLOAD_ALLOWED_TARGETS"),
+		`hosts a redirect may lead to, same syntax as serve -allow-targets; empty (default): redirects are followed only to the scenario's own target hosts`)
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
 	}
 	if *master == "" || *token == "" {
 		fmt.Fprintln(stderr, "worker: -master and a token (GOLOAD_WORKER_TOKEN) are required")
 		return exitUsage
+	}
+
+	var allow func(string) error
+	if list, err := allowlist.Parse(*allowTargets); err != nil {
+		fmt.Fprintf(stderr, "worker: %v\n", err)
+		return exitUsage
+	} else if !list.Empty() {
+		allow = list.Check
 	}
 
 	log := slog.New(slog.NewTextHandler(stderr, nil))
@@ -42,6 +53,7 @@ func cmdWorker(args []string, stdout, stderr io.Writer) int {
 		ID:         *id,
 		Version:    version,
 		Logger:     log,
+		Allow:      allow,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "worker: %v\n", err)

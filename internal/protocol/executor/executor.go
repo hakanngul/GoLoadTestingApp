@@ -1,7 +1,8 @@
 // Package executor builds the protocol.Executor for a scenario, choosing
 // the protocol per step: HTTP steps run on protocol/httpx, WebSocket steps
 // (type ws) on protocol/wsx. Scenarios may mix both; steps then run in
-// scenario order within one iteration, sharing variables, the coordinated
+// scenario order within one iteration, sharing variables, cookies (the
+// virtual user's protocol.Session), the coordinated
 // omission rule (first step measured from `intended`), think times and
 // stop-on-first-failure.
 //
@@ -80,7 +81,7 @@ func newPlain(sc *scenario.Scenario, opts Options) (protocol.Executor, func(), e
 	httpSc, wsSc := *sc, *sc
 	httpSc.Steps = make([]scenario.Step, 0, nHTTP)
 	wsSc.Steps = make([]scenario.Step, 0, nWS)
-	m := &mixed{steps: make([]stepRef, len(sc.Steps))}
+	m := &mixed{steps: make([]stepRef, len(sc.Steps)), cookies: sc.Target.CookiesEnabled()}
 	for i := range sc.Steps {
 		st := sc.Steps[i]
 		ref := stepRef{ws: st.IsWS(), think: st.ThinkTime.Duration}
@@ -116,6 +117,9 @@ type mixed struct {
 	http  *httpx.Executor
 	ws    *wsx.Executor
 	steps []stepRef
+	// cookies: HTTP and ws steps of an iteration share the virtual
+	// user's protocol.Session (cookie jar).
+	cookies bool
 }
 
 func (m *mixed) close() {
@@ -126,6 +130,9 @@ func (m *mixed) close() {
 // Iterate implements protocol.Executor with the same semantics as
 // httpx.Executor.Iterate, dispatching each step to its protocol.
 func (m *mixed) Iterate(ctx context.Context, vars map[string]string, intended time.Time, sink func(protocol.Result)) {
+	if m.cookies {
+		ctx, _ = protocol.EnsureSession(ctx) // open model: a new visitor
+	}
 	for i, ref := range m.steps {
 		if ctx.Err() != nil {
 			return
