@@ -73,6 +73,12 @@ const paths: Record<string, ReactNode> = {
       <path d="M10 10l3.5 3.5" />
     </>
   ),
+  copy: (
+    <>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.2" />
+      <path d="M10.5 5.5V3.2a.7.7 0 00-.7-.7H3.2a.7.7 0 00-.7.7v6.6a.7.7 0 00.7.7h2.3" />
+    </>
+  ),
   external: <path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5M11.5 9.5v4h-9v-9h4" />,
 };
 

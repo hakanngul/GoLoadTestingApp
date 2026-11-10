@@ -1,8 +1,10 @@
 import type {
   APIErrorBody,
   CompareResult,
+  ErrorGroup,
   ErrorSample,
   Health,
+  LiveStats,
   MetricPoint,
   Overview,
   Run,
@@ -166,6 +168,9 @@ export const api = {
     request<MetricPoint[] | null>('GET', `/api/runs/${enc(id)}/metrics`).then((r) => r ?? []),
   runErrors: (id: string) =>
     request<ErrorSample[] | null>('GET', `/api/runs/${enc(id)}/errors`).then((r) => r ?? []),
+  /** Grouped failure counts (live while running, final after). */
+  runErrorGroups: (id: string) =>
+    request<ErrorGroup[] | null>('GET', `/api/runs/${enc(id)}/error-groups`).then((r) => r ?? []),
 
   listWorkers: () => request<Worker[] | null>('GET', '/api/workers').then((r) => r ?? []),
 
@@ -267,6 +272,8 @@ export interface RunStreamHandlers {
   onMetric?: (p: MetricPoint) => void;
   onStatus?: (r: Run) => void;
   onDone?: (r: Run) => void;
+  /** Live per-step table + error groups, once per second (and right after subscribing). */
+  onStats?: (s: LiveStats) => void;
   /** Called when the connection drops; EventSource retries automatically. */
   onConnectionChange?: (connected: boolean) => void;
 }
@@ -313,6 +320,10 @@ export function subscribeRun(id: string, h: RunStreamHandlers): () => void {
   es.addEventListener('status', (ev) => {
     const r = parse<Run>(ev as MessageEvent);
     if (r) h.onStatus?.(r);
+  });
+  es.addEventListener('stats', (ev) => {
+    const s = parse<LiveStats>(ev as MessageEvent);
+    if (s) h.onStats?.(s);
   });
   es.addEventListener('done', (ev) => {
     const r = parse<Run>(ev as MessageEvent);

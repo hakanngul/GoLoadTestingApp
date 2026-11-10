@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, download, errorText, exportUrls, subscribeRun } from '../api/client';
-import { isFinished, type Comparison, type MetricPoint, type Run, type Summary } from '../api/types';
+import { isFinished, type Comparison, type LiveStats, type MetricPoint, type Run, type Summary } from '../api/types';
 import { RunCharts } from '../components/charts';
+import { FailuresTable, LiveStatsPanel } from '../components/livestats';
 import { BaselineBadge, DeltaText, Menu, MetricDeltaTable, OverallBadge, RunLabel, WindowControl } from '../components/report';
 import { ConfirmDialog, ErrorAlert, Icon, Kpi, Loading, Modal, StatusBadge } from '../components/ui';
 import {
@@ -21,6 +22,7 @@ import {
 import { useAsync, useNow } from '../lib/hooks';
 import { OP_SYMBOL, summarizeYaml, unitFor } from '../lib/scenario';
 import { remoteWorkers } from '../lib/workers';
+import { errorStatusLabel, errorStatusTone, fmtRunOffset } from '../lib/livestats';
 import {
   customWindow,
   findDelta,
@@ -93,6 +95,7 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
   const [confirmStop, setConfirmStop] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [stopErr, setStopErr] = useState<unknown>(null);
+  const [live, setLive] = useState<{ stats: LiveStats | null; seq: number }>({ stats: null, seq: 0 });
   const mapRef = useRef(new Map<number, MetricPoint>());
   const now = useNow(1000);
 
@@ -115,6 +118,7 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
         schedule();
       },
       onStatus: (r) => alive && setRun(r),
+      onStats: (st) => alive && setLive((cur) => ({ stats: st, seq: cur.seq + 1 })),
       onDone: (r) => alive && onDone(r),
       onConnectionChange: (c) => alive && setConnected(c),
     });
@@ -174,7 +178,8 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
     }
     return { req, errs, dropped };
   }, [points]);
-  void now;
+  const cum = live.stats?.total;
+  const cumSub = (v: number | undefined) => (cum && cum.requests > 0 ? `cumulative ${fmtMs(v)}` : 'cumulative —');
 
   const stop = async () => {
     setStopping(true);
@@ -247,8 +252,8 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
           }
         />
         <Kpi label="p50" value={last ? fmtMs(last.p50_ms) : '—'} sub={`mean ${fmtMs(last?.mean_ms)}`} />
-        <Kpi label="p95" value={last ? fmtMs(last.p95_ms) : '—'} sub={`max ${fmtMs(last?.max_ms)}`} />
-        <Kpi label="p99" value={last ? fmtMs(last.p99_ms) : '—'} />
+        <Kpi label="p95" value={last ? fmtMs(last.p95_ms) : '—'} sub={<span title="Since the start of the run">{cumSub(cum?.p95_ms)}</span>} />
+        <Kpi label="p99" value={last ? fmtMs(last.p99_ms) : '—'} sub={<span title="Since the start of the run">{cumSub(cum?.p99_ms)}</span>} />
         <Kpi
           label="Error rate"
           value={fmtPct(last?.error_rate)}
@@ -272,6 +277,7 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
       </div>
 
       <RunCharts points={points} targetUnit={unit} xMax={total} />
+      <LiveStatsPanel stats={live.stats} seq={live.seq} now={now} />
         </>
       )}
 
@@ -377,6 +383,7 @@ export function ResultView({ run: initialRun }: { run: Run }) {
   const test = useAsync(() => api.getTest(run.test_id), [run.test_id]);
   const metrics = useAsync(() => api.runMetrics(run.id), [run.id]);
   const errors = useAsync(() => api.runErrors(run.id), [run.id]);
+  const errorGroups = useAsync(() => api.runErrorGroups(run.id), [run.id]);
   const [compareOpen, setCompareOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [delBusy, setDelBusy] = useState(false);
@@ -647,12 +654,35 @@ export function ResultView({ run: initialRun }: { run: Run }) {
           throughputExtra={hasResults ? <span className="muted no-print" style={{ fontSize: 11.5 }}>drag to set a custom window</span> : undefined}
         />
 
-        <div className="card">
+        <div className="card" id="failures">
           <div className="card-head">
-            <h2>Error samples</h2>
+            <h2>Failures</h2>
+            <span className="muted" style={{ fontSize: 12 }}>
+              every failed request, grouped by step, status and message
+            </span>
             <span className="spacer" />
-            <span className="muted">{errors.data ? `${errors.data.length} kept · whole run` : ''}</span>
+            <span className="window-tag">whole run</span>
           </div>
+          {errorGroups.error ? (
+            <div className="card-body">
+              <ErrorAlert error={errorGroups.error} title="Grouped failures unavailable" />
+            </div>
+          ) : (
+            <FailuresTable
+              groups={errorGroups.loading && !errorGroups.data ? null : errorGroups.data ?? []}
+              fmtTime={(iso) => (
+                <span title={fmtDateTime(iso)}>{fmtRunOffset(iso, run.started_at)}</span>
+              )}
+              maxHeight={420}
+            />
+          )}
+        </div>
+
+        <details className="card collapsible samples" open={!!errorGroups.error}>
+          <summary>
+            Error samples
+            <span className="muted">{errors.data ? `${errors.data.length} kept · whole run` : ''}</span>
+          </summary>
           {errors.loading ? (
             <Loading />
           ) : errors.error ? (
@@ -660,7 +690,7 @@ export function ResultView({ run: initialRun }: { run: Run }) {
               <ErrorAlert error={errors.error} />
             </div>
           ) : (errors.data ?? []).length === 0 ? (
-            <div className="empty">No errors recorded.</div>
+            <div className="empty">No error samples recorded.</div>
           ) : (
             <div className="table-wrap errors-wrap">
               <table className="t compact">
@@ -668,7 +698,7 @@ export function ResultView({ run: initialRun }: { run: Run }) {
                   <tr>
                     <th>Time</th>
                     <th>Step</th>
-                    <th className="num">Status</th>
+                    <th>Status</th>
                     <th>Message</th>
                   </tr>
                 </thead>
@@ -679,8 +709,8 @@ export function ResultView({ run: initialRun }: { run: Run }) {
                         {fmtTime(e.t)}
                       </td>
                       <td>{e.step}</td>
-                      <td className="num mono">
-                        <span className={e.status >= 500 || e.status === 0 ? 'bad' : 'warn'}>{e.status || '—'}</span>
+                      <td>
+                        <span className={`status-chip ${errorStatusTone(e.status)}`}>{errorStatusLabel(e.status)}</span>
                       </td>
                       <td className="mono" style={{ wordBreak: 'break-word' }}>
                         {e.message}
@@ -691,7 +721,7 @@ export function ResultView({ run: initialRun }: { run: Run }) {
               </table>
             </div>
           )}
-        </div>
+        </details>
 
         <details className="card collapsible no-print">
           <summary>Scenario YAML used</summary>

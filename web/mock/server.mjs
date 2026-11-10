@@ -95,6 +95,7 @@ const tests = new Map();
 const runs = new Map();
 const metrics = new Map(); // runId -> MetricPoint[]
 const errorsByRun = new Map();
+const errorGroupsByRun = new Map(); // runId -> ErrorGroup[] (finished runs)
 const fileContents = new Map(); // `${testId}/${name}` -> size
 
 function readExample(name) {
@@ -135,6 +136,18 @@ steps:
       - type: duration
         op: lt
         value: 400ms
+  - name: search
+    method: GET
+    path: /v2/search?q={{term}}
+    assert:
+      - type: status
+        value: "200"
+  - name: categories
+    method: GET
+    path: /v2/categories
+    assert:
+      - type: status
+        value: "200"
 thresholds:
   - metric: latency.p95
     op: lt
@@ -224,7 +237,7 @@ const perf = {
   t_9c1e44a0: { p50: 38, p95: 92, p99: 160, capacity: 400, err: 0.0005, stepFactor: [0.6, 1.4] },
   t_4b7f02d3: { p50: 140, p95: 380, p99: 690, capacity: 60, err: 0.003, stepFactor: [1.5, 0.5] },
   t_e81a6c57: { p50: 55, p95: 130, p99: 240, capacity: 580, err: 0.001, stepFactor: [1.2, 0.8] },
-  t_27d5b9f8: { p50: 48, p95: 118, p99: 205, capacity: 520, err: 0.0015, stepFactor: [1.25, 0.75] },
+  t_27d5b9f8: { p50: 48, p95: 118, p99: 205, capacity: 520, err: 0.0015, stepFactor: [1.25, 0.75, 1.7, 0.45] },
   t_5a0c3e19: { p50: 64, p95: 170, p99: 310, capacity: 300, err: 0.002, stepFactor: [1] },
 };
 function perfFor(testId) {
@@ -366,6 +379,45 @@ function genErrors(run, meta, points) {
   return out.sort((a, b) => a.t.localeCompare(b.t));
 }
 
+const ERROR_GROUP_OTHER = '(other errors)';
+
+// Grouped failures of a finished run, derived from its samples and scaled up
+// to the run's total error count (samples are capped, groups count everything).
+function groupsFromSamples(run, samples, overflow = false) {
+  const total = run.summary?.errors ?? 0;
+  if (!total || !samples.length) return [];
+  const by = new Map();
+  for (const e of samples) {
+    const k = `${e.step}\u0000${e.status}\u0000${e.message}`;
+    const g = by.get(k) || { step: e.step, status: e.status, message: e.message, count: 0, first: e.t, last: e.t };
+    g.count++;
+    if (e.t < g.first) g.first = e.t;
+    if (e.t > g.last) g.last = e.t;
+    by.set(k, g);
+  }
+  const groups = [...by.values()];
+  const otherShare = overflow ? 0.04 : 0;
+  const budget = Math.round(total * (1 - otherShare));
+  let left = budget;
+  groups.sort((a, b) => b.count - a.count);
+  groups.forEach((g, i) => {
+    const c = i === groups.length - 1 ? Math.max(1, left) : Math.max(1, Math.round((g.count / samples.length) * budget));
+    left -= c;
+    g.count = c;
+  });
+  if (overflow) {
+    groups.push({
+      step: '',
+      status: 0,
+      message: ERROR_GROUP_OTHER,
+      count: Math.max(1, total - budget),
+      first: groups[0].first,
+      last: groups[0].last,
+    });
+  }
+  return groups.sort((a, b) => b.count - a.count);
+}
+
 function finishedRun(testId, agoH, opts = {}) {
   const t = tests.get(testId);
   const meta = scenarioMeta(t.yaml);
@@ -404,6 +456,7 @@ function finishedRun(testId, agoH, opts = {}) {
   runs.set(id, run);
   metrics.set(id, pts);
   errorsByRun.set(id, genErrors(run, meta, pts));
+  errorGroupsByRun.set(id, groupsFromSamples(run, errorsByRun.get(id), opts.overflow));
   return run;
 }
 
@@ -453,7 +506,7 @@ history('t_9c1e44a0', [
 ]);
 history('t_e81a6c57', [
   { ago: 11 * D, degrade: 1.0, label: 'v3.1.0' },
-  { ago: 50, degrade: 1.45, errBurst: [92, 104], label: 'v3.2.0' }, // failed: errors during spike
+  { ago: 50, degrade: 1.45, errBurst: [92, 104], label: 'v3.2.0', overflow: true }, // failed: errors during spike
 ]);
 for (const [tid, rid] of Object.entries(baselines)) tests.get(tid).baseline_run_id = rid;
 const errRun = {
@@ -475,6 +528,7 @@ const errRun = {
 runs.set(errRun.id, errRun);
 metrics.set(errRun.id, []);
 errorsByRun.set(errRun.id, []);
+errorGroupsByRun.set(errRun.id, []);
 
 // ---------------------------------------------------------------- live runs
 const live = new Map(); // runId -> { meta, clients:Set, timer, stopped }
@@ -483,18 +537,179 @@ function sse(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+// ---- live statistics (event: stats) ----
+// Error groups that show up over the run: [step index, status, message, from second, weight].
+const LIVE_ERRORS = [
+  [0, 500, 'assert status eq 200: got 500', 0, 1],
+  [1, 503, 'status 503: upstream connect error or disconnect/reset before headers. reset reason: overflow', 30, 3],
+  [
+    2,
+    0,
+    'Get "https://catalog.internal.example.test/v2/search?q=wireless+headphones": context deadline exceeded (Client.Timeout exceeded while awaiting headers)',
+    55,
+    2,
+  ],
+  [3, 429, 'assert status eq 200: got 429 (Too Many Requests)\nbody: {"error":"rate limit exceeded","retry_after":1}', 95, 1],
+  [1, 0, 'dial tcp 10.0.3.17:443: connect: connection refused', 125, 0.6],
+];
+
+function newLiveStats(meta) {
+  const steps = meta.steps.length ? meta.steps : ['step 1'];
+  return {
+    steps,
+    acc: Object.fromEntries(steps.map((n) => [n, { requests: 0, errors: 0, w: { mean: 0, p50: 0, p90: 0, p95: 0, p99: 0 }, max: 0 }])),
+    groups: new Map(),
+    current: null,
+    elapsed: 0,
+  };
+}
+
+const p90of = (p50, p95) => p50 + (p95 - p50) * 0.78;
+
+function stepSummary(requests, errors, dur, lat) {
+  return {
+    requests,
+    errors,
+    dropped: 0,
+    error_rate: requests ? round(errors / requests, 5) : 0,
+    rps: round(requests / Math.max(1, dur), 2),
+    mean_ms: round(lat.mean, 2),
+    p50_ms: round(lat.p50, 2),
+    p90_ms: round(lat.p90, 2),
+    p95_ms: round(lat.p95, 2),
+    p99_ms: round(lat.p99, 2),
+    max_ms: round(lat.max, 2),
+  };
+}
+
+// Folds one second (MetricPoint) into the cumulative per-step stats.
+function accumulateLive(run, ls, p) {
+  const perf = perfFor(run.test_id);
+  const n = ls.steps.length;
+  // Request split: list and detail dominate, search is rarer.
+  const weights = ls.steps.map((_, i) => [0.36, 0.34, 0.18, 0.12][i] ?? 1 / n);
+  const wsum = weights.reduce((a, b) => a + b, 0);
+  let left = p.requests;
+  const reqs = weights.map((w, i) => {
+    const r = i === n - 1 ? left : Math.round((p.requests * w) / wsum);
+    left -= r;
+    return Math.max(0, r);
+  });
+  // Errors into the groups active at this second.
+  const errs = new Array(n).fill(0);
+  const active = LIVE_ERRORS.filter((d) => p.elapsed >= d[3] && d[0] < n);
+  const aw = active.reduce((a, d) => a + d[4], 0);
+  let eleft = p.errors;
+  active.forEach((d, i) => {
+    let c = i === active.length - 1 ? eleft : Math.floor((p.errors * d[4]) / aw + rand());
+    c = Math.max(0, Math.min(eleft, c));
+    eleft -= c;
+    if (!c) return;
+    errs[d[0]] += c;
+    const key = `${d[0]}|${d[1]}|${d[2]}`;
+    const at = iso(Date.parse(p.t) + Math.floor(rand() * 900));
+    const g = ls.groups.get(key) || { step: ls.steps[d[0]], status: d[1], message: d[2], count: 0, first: at, last: at };
+    g.count += c;
+    g.last = at;
+    ls.groups.set(key, g);
+  });
+  const cur = {};
+  ls.steps.forEach((name, i) => {
+    const f = perf.stepFactor[i] ?? 1;
+    const j = () => noise(0.05);
+    const p50 = p.p50_ms * f * j();
+    const p95 = Math.max(p50 * 1.5, p.p95_ms * f * j());
+    const p99 = Math.max(p95 * 1.15, p.p99_ms * f * j());
+    const lat = { mean: p50 * 1.15, p50, p90: p90of(p50, p95), p95, p99, max: Math.max(p99 * 1.2, p.max_ms * f * (0.7 + rand() * 0.3)) };
+    const e = Math.min(reqs[i], errs[i]);
+    cur[name] = stepSummary(reqs[i], e, 1, lat);
+    const a = ls.acc[name];
+    a.requests += reqs[i];
+    a.errors += e;
+    for (const k of ['mean', 'p50', 'p90', 'p95', 'p99']) a.w[k] += lat[k] * reqs[i];
+    a.max = Math.max(a.max, lat.max);
+  });
+  ls.current = {
+    ...stepSummary(p.requests, p.errors, 1, {
+      mean: p.mean_ms,
+      p50: p.p50_ms,
+      p90: p90of(p.p50_ms, p.p95_ms),
+      p95: p.p95_ms,
+      p99: p.p99_ms,
+      max: p.max_ms,
+    }),
+    dropped: p.dropped,
+    by_step: cur,
+  };
+  ls.elapsed = p.elapsed;
+}
+
+function liveStatsPayload(ls) {
+  const dur = Math.max(1, ls.elapsed);
+  const by = {};
+  let requests = 0;
+  let errors = 0;
+  let max = 0;
+  const w = { mean: 0, p50: 0, p90: 0, p95: 0, p99: 0 };
+  for (const name of ls.steps) {
+    const a = ls.acc[name];
+    const r = a.requests || 1;
+    // Cumulative tails are a bit wider than the average of per-second tails.
+    by[name] = stepSummary(a.requests, a.errors, dur, {
+      mean: a.w.mean / r,
+      p50: a.w.p50 / r,
+      p90: (a.w.p90 / r) * 1.02,
+      p95: (a.w.p95 / r) * 1.04,
+      p99: (a.w.p99 / r) * 1.08,
+      max: a.max,
+    });
+    requests += a.requests;
+    errors += a.errors;
+    max = Math.max(max, a.max);
+    for (const k of Object.keys(w)) w[k] += a.w[k];
+  }
+  const r = requests || 1;
+  const total = {
+    ...stepSummary(requests, errors, dur, {
+      mean: w.mean / r,
+      p50: w.p50 / r,
+      p90: (w.p90 / r) * 1.02,
+      p95: (w.p95 / r) * 1.05,
+      p99: (w.p99 / r) * 1.1,
+      max,
+    }),
+    by_step: by,
+  };
+  const empty = stepSummary(0, 0, 1, { mean: 0, p50: 0, p90: 0, p95: 0, p99: 0, max: 0 });
+  return {
+    elapsed: ls.elapsed,
+    total,
+    current: ls.current ?? { ...empty, by_step: {} },
+    errors: liveGroups(ls),
+  };
+}
+
+function liveGroups(ls) {
+  return [...ls.groups.values()].map((g) => ({ ...g })).sort((a, b) => b.count - a.count);
+}
+
 function startLive(run, opts = {}) {
   const meta = scenarioMeta(run.yaml);
   const pts = [];
   metrics.set(run.id, pts);
   errorsByRun.set(run.id, []);
-  const state = { meta, clients: new Set(), stopped: false, opts };
+  const ls = newLiveStats(meta);
+  const state = { meta, clients: new Set(), stopped: false, opts, ls };
   live.set(run.id, state);
   // Load starts once the run leaves `queued` (spot workers launched).
   const startedMs = Date.parse(run.started_at) + (opts.queueMs ?? 0);
   // Backfill seconds that already "happened" (for a run pre-started at boot).
   const already = Math.floor((Date.now() - startedMs) / 1000);
-  for (let s = 1; s <= already && s <= meta.total; s++) pts.push(genPoint(run, meta, s, opts));
+  for (let s = 1; s <= already && s <= meta.total; s++) {
+    const p = genPoint(run, meta, s, opts);
+    pts.push(p);
+    accumulateLive(run, ls, p);
+  }
   state.timer = setInterval(() => {
     if (state.stopped) return finishLive(run);
     if (run.status === 'queued') {
@@ -507,8 +722,11 @@ function startLive(run, opts = {}) {
     if (elapsed < 1 || pts.length >= elapsed) return;
     const p = genPoint(run, meta, elapsed, opts);
     pts.push(p);
+    accumulateLive(run, ls, p);
     run.peak_cpu = Math.max(run.peak_cpu, p.cpu);
     for (const c of state.clients) sse(c, 'metric', p);
+    const payload = liveStatsPayload(ls);
+    for (const c of state.clients) sse(c, 'stats', payload);
   }, 250);
 }
 
@@ -524,6 +742,7 @@ function finishLive(run) {
   run.finished_at = iso(Date.now());
   run.status = state.stopped ? 'stopped' : run.thresholds.every((x) => x.passed) ? 'passed' : 'failed';
   errorsByRun.set(run.id, genErrors(run, state.meta, pts));
+  errorGroupsByRun.set(run.id, liveGroups(state.ls));
   for (const c of state.clients) {
     sse(c, 'done', run);
     c.end();
@@ -548,10 +767,10 @@ function createRun(testId, workers, startedAgoS = 0, queueS = 0, extra = {}) {
     notes: String(extra.notes ?? '').slice(0, 10000),
   };
   runs.set(run.id, run);
-  startLive(run, { queueMs: queueS * 1000 });
+  startLive(run, { queueMs: queueS * 1000, errMult: extra.errMult });
   return run;
 }
-const liveRun = createRun('t_27d5b9f8', 1, 75, 0, { label: 'v1.4.0-rc2' });
+const liveRun = createRun('t_27d5b9f8', 1, 75, 0, { label: 'v1.4.0-rc2', errMult: 4 });
 console.log(`[mock] live run ${liveRun.id} (catalog-soak) in progress`);
 // A distributed run waiting for spot instances (4 workers wanted, 2 idle).
 const queuedRun = createRun('t_9c1e44a0', 4, 42, 42 + QUEUE_S);
@@ -1016,6 +1235,7 @@ const server = createServer(async (req, res) => {
         runs.delete(run.id);
         metrics.delete(run.id);
         errorsByRun.delete(run.id);
+        errorGroupsByRun.delete(run.id);
         for (const t of tests.values()) if (t.baseline_run_id === run.id) delete t.baseline_run_id;
         return send(res, 204);
       }
@@ -1046,6 +1266,10 @@ const server = createServer(async (req, res) => {
       }
       if (c === 'metrics' && m === 'GET') return send(res, 200, metrics.get(run.id) || []);
       if (c === 'errors' && m === 'GET') return send(res, 200, errorsByRun.get(run.id) || []);
+      if (c === 'error-groups' && m === 'GET') {
+        const st = live.get(run.id);
+        return send(res, 200, st ? liveGroups(st.ls) : errorGroupsByRun.get(run.id) || []);
+      }
       if (c === 'stream' && m === 'GET') {
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
@@ -1059,6 +1283,7 @@ const server = createServer(async (req, res) => {
           return res.end();
         }
         sse(res, 'status', run);
+        if (run.status === 'running' && st.ls.elapsed > 0) sse(res, 'stats', liveStatsPayload(st.ls));
         st.clients.add(res);
         const ping = setInterval(() => res.write(': ping\n\n'), 15000);
         req.on('close', () => {

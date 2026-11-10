@@ -103,6 +103,35 @@ export interface ErrorSample {
   message: string;
 }
 
+/** Failed requests with the same step, status and message (GET /api/runs/{id}/error-groups). */
+export interface ErrorGroup {
+  step: string;
+  /** 0 = transport error / timeout. */
+  status: number;
+  message: string;
+  count: number;
+  /** RFC 3339. */
+  first: string;
+  last: string;
+}
+
+/** Max distinct error groups tracked per run (model.MaxErrorGroups). */
+export const MAX_ERROR_GROUPS = 100;
+/** Message of the overflow group (model.ErrorGroupOther). */
+export const ERROR_GROUP_OTHER = '(other errors)';
+
+/** SSE `event: stats`, once per second while a run is active (model.LiveStats). */
+export interface LiveStats {
+  /** Seconds since run start. */
+  elapsed: number;
+  /** Cumulative since start, by_step filled. */
+  total: Summary;
+  /** Last one-second interval, by_step filled. */
+  current: Summary;
+  /** Most frequent first, at most MAX_ERROR_GROUPS (+ overflow group). */
+  errors: ErrorGroup[] | null;
+}
+
 export type WorkerState = 'idle' | 'busy' | 'lost';
 
 export interface Worker {
