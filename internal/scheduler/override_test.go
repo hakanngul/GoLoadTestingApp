@@ -200,3 +200,11 @@ func TestDescribeLoad(t *testing.T) {
 		}
 	}
 }
+
+// The web UI shows the same fallback (INSTANT_RAMP_MS in
+// web/src/lib/schedule.ts); update both together.
+func TestInstantRampMatchesWebUI(t *testing.T) {
+	if instantRamp != time.Second {
+		t.Fatalf("instantRamp = %s; update INSTANT_RAMP_MS in web/src/lib/schedule.ts to match", instantRamp)
+	}
+}
