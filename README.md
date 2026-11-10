@@ -236,6 +236,30 @@ Semantics worth knowing:
   its first occurrence. The dialog previews the next 5 fire times.
 - Deleting a test deletes its schedules; deleting a schedule keeps its runs.
 
+## Test suites
+
+A **suite** groups saved tests (test cases) so they run with one click:
+*Suites → New suite*, add tests in order, pick how they run, then **Run**.
+
+- **One after another** (default): each test starts when the previous one
+  has finished, optionally with a pause between them. *Stop on first
+  failure* skips the remaining tests once one fails or errors.
+- **All at once**: every test starts together. They share the load
+  generator's CPU and network, so use workers or sequential mode when you
+  need clean, comparable numbers.
+
+Each test runs with its own saved load settings (per-test worker count can
+be set in the suite) and also appears under **Runs** with the suite run's
+label. The suite run page shows live status, requests, RPS, p95 and error
+rate per test, with links to each run's report. A suite run passes only if
+every test passed. A deleted test stays listed and is reported as an error
+when the suite runs. Suite runs that were active when the server stopped
+are marked as error on the next start.
+
+API: `/api/suites` (CRUD), `POST /api/suites/{id}/runs`,
+`GET /api/suite-runs/{id}`, `POST /api/suite-runs/{id}/stop` (see
+`internal/api/doc.go`).
+
 ## How it measures
 
 - **Open model (default).** The target is iterations per second. Arrival times come from the integral of the ramp, so there is no drift. When `max_vus` iterations are already in flight, a new arrival is dropped and counted, never queued.

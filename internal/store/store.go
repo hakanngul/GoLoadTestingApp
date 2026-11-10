@@ -162,3 +162,38 @@ type ScheduleStore interface {
 	// changed.
 	SetScheduleResult(ctx context.Context, id string, r ScheduleResult) (model.Schedule, error)
 }
+
+// SuiteRunFilter narrows ListSuiteRuns. Zero value = every suite run,
+// newest first, limit 50.
+type SuiteRunFilter struct {
+	SuiteID string // "" = all suites
+	Active  bool   // only queued/running
+	Limit   int    // <= 0 = 50
+}
+
+// SuiteStore is the test-suite side of a store. Every Store in this
+// package implements it; it is a separate interface so test doubles of
+// Store need not. Suite items reference tests by ID only: deleting a
+// test leaves its items in place (Suite.Items[].TestName is filled by
+// the caller). Deleting a suite deletes its suite runs (the test runs
+// they started are kept).
+type SuiteStore interface {
+	// ListSuites returns every suite, name order.
+	ListSuites(ctx context.Context) ([]model.Suite, error)
+	GetSuite(ctx context.Context, id string) (model.Suite, error)
+	// CreateSuite stores s with a fresh ID and timestamps. Duplicate
+	// name: ErrConflict.
+	CreateSuite(ctx context.Context, s model.Suite) (model.Suite, error)
+	// UpdateSuite replaces everything but ID and CreatedAt and bumps
+	// UpdatedAt. Unknown: ErrNotFound; duplicate name: ErrConflict.
+	UpdateSuite(ctx context.Context, s model.Suite) (model.Suite, error)
+	DeleteSuite(ctx context.Context, id string) error
+
+	// CreateSuiteRun stores r with a fresh ID. Unknown suite: ErrNotFound.
+	CreateSuiteRun(ctx context.Context, r model.SuiteRun) (model.SuiteRun, error)
+	// UpdateSuiteRun replaces Status, FinishedAt, Items and Error.
+	UpdateSuiteRun(ctx context.Context, r model.SuiteRun) error
+	GetSuiteRun(ctx context.Context, id string) (model.SuiteRun, error)
+	// ListSuiteRuns returns suite runs newest started first.
+	ListSuiteRuns(ctx context.Context, f SuiteRunFilter) ([]model.SuiteRun, error)
+}

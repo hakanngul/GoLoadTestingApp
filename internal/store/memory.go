@@ -26,6 +26,8 @@ type Memory struct {
 	errs    map[string][]model.ErrorSample // run ID -> samples, sorted by T
 	groups  map[string][]model.ErrorGroup  // run ID -> final error groups
 	scheds  map[string]*model.Schedule     // schedule ID -> schedule (TestName empty)
+	suites  map[string]*model.Suite        // suite ID -> suite (item names empty)
+	sruns   map[string]*model.SuiteRun     // suite run ID -> suite run
 }
 
 type memTest struct {
@@ -50,6 +52,8 @@ func NewMemory() *Memory {
 		errs:    make(map[string][]model.ErrorSample),
 		groups:  make(map[string][]model.ErrorGroup),
 		scheds:  make(map[string]*model.Schedule),
+		suites:  make(map[string]*model.Suite),
+		sruns:   make(map[string]*model.SuiteRun),
 	}
 }
 
