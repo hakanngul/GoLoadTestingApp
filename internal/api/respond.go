@@ -75,6 +75,10 @@ func (s *server) writeErr(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusConflict, "run is not active")
 	case errors.Is(err, runner.ErrTargetNotAllowed):
 		writeError(w, http.StatusForbidden, "target not allowed", err.Error())
+	case errors.Is(err, runner.ErrDistributedUnavailable):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, runner.ErrShuttingDown):
+		writeError(w, http.StatusServiceUnavailable, "server is shutting down")
 	case errors.As(err, &vd):
 		writeError(w, http.StatusBadRequest, "invalid scenario", vd.ValidationDetails()...)
 	case len(fieldErrors(err)) > 0:
