@@ -4,6 +4,8 @@ import (
 	"context"
 	"math"
 	"time"
+
+	"github.com/hakanngul/GoLoadTestingApp/internal/protocol"
 )
 
 // closedTick is how often the closed-model controller re-evaluates the
@@ -60,9 +62,14 @@ func (e *Engine) runClosed(ctx context.Context, r *runState, segs []segment, sta
 
 // vu is one closed-model virtual user. It exits after its current iteration
 // once stop is closed or ctx (the scheduling context) is done.
+//
+// The VU owns one protocol.Session (its cookie jar) for its whole life, so
+// cookies set in one iteration are sent in the next, like a Locust user or
+// a JMeter thread. A VU started later (ramp-up) starts with an empty jar.
 func (e *Engine) vu(ctx context.Context, r *runState, stop <-chan struct{}) {
 	defer r.wg.Done()
 	defer e.vus.Add(-1)
+	iterCtx := protocol.WithSession(r.iterCtx, protocol.NewSession())
 	for {
 		select {
 		case <-stop:
@@ -72,7 +79,7 @@ func (e *Engine) vu(ctx context.Context, r *runState, stop <-chan struct{}) {
 		default:
 		}
 		e.active.Add(1)
-		ok := r.iterate(time.Now())
+		ok := r.iterate(iterCtx, time.Now())
 		e.active.Add(-1)
 		if !ok {
 			return

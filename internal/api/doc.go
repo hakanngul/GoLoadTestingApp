@@ -21,10 +21,16 @@
 //	                                         order) through the same executors as runs and reports every step
 //	                                         (rendered URL, redacted headers, status, duration, selected response
 //	                                         headers, body snippet <= 8 KiB text, extracts, assertions) plus hints.
+//	                                         Redirects are followed like in runs: a step's status/headers/body are
+//	                                         those of the final response, `redirects` lists every followed hop
+//	                                         {status, method, url, location, cookies_sent?, cookies_set?} and
+//	                                         `final_url` the last request. `cookies_sent` / `cookies_set` name the
+//	                                         cookies sent with / stored from the final exchange (names only, never
+//	                                         values). `location` is set only for a final 3xx (not followed).
 //	                                         Stops at the first failing step (later steps: not_run). Uses the first
 //	                                         row of the test's data file (test_id; unsaved tests run without data,
 //	                                         see data_note). Target allowlist enforced like runs (rejection is a
-//	                                         hint, nothing is sent). Limits: 30 s total, scenario timeout per step,
+//	                                         hint, nothing is sent), also for every redirect hop to another host. Limits: 30 s total, scenario timeout per step,
 //	                                         first 20 steps, think times / ws hold skipped, 4 concurrent tries
 //	                                         server-wide (429 + Retry-After otherwise). 400 for invalid yaml,
 //	                                         404 for an unknown test_id.

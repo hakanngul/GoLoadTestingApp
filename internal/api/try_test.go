@@ -106,7 +106,9 @@ func TestTryEndpoint(t *testing.T) {
 func TestTryRedirectHintOverAPI(t *testing.T) {
 	srv := echoTarget(t)
 	e := tryEnv(t, "")
-	y := strings.Replace(tryYAML(srv.URL, ""), "/echo?u={{user}}", "/moved", 1)
+	// follow_redirects: false keeps the 3xx itself (the redirect target
+	// does not exist); followed redirects are covered in package trial.
+	y := strings.Replace(tryYAML(srv.URL, ""), "/echo?u={{user}}", "/moved\n    follow_redirects: false", 1)
 	res := decode[model.TryResult](t, e.json(t, "POST", "/api/tests/try", model.TryRequest{YAML: y}))
 	if res.OK || len(res.Hints) != 1 || res.Hints[0].Fix == nil || res.Hints[0].Fix.Value != "https://www.example.test" {
 		t.Fatalf("res = %+v", res)

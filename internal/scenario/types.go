@@ -23,7 +23,42 @@ type Target struct {
 	Headers            map[string]string `yaml:"headers,omitempty"`
 	Timeout            Duration          `yaml:"timeout,omitempty"` // default 30s
 	InsecureSkipVerify bool              `yaml:"insecure_skip_verify,omitempty"`
+
+	// Cookies: nil/true keeps a cookie jar per virtual user (like a
+	// Locust user or a JMeter thread with a Cookie Manager): Set-Cookie
+	// from every response (including redirect hops, the auth login and
+	// WebSocket handshakes) is stored and sent back on later requests.
+	// Closed model: one jar per VU for its whole life, across
+	// iterations. Open model: every iteration is a new visitor and starts
+	// with an empty jar. A Cookie header set on the target or a step is
+	// merged with the jar (the explicit cookie wins on a name clash).
+	// false sends only explicit Cookie headers.
+	Cookies *bool `yaml:"cookies,omitempty"`
+	// FollowRedirects: nil/true follows 3xx responses of HTTP steps
+	// (like Locust, JMeter and browsers), so a step reports the FINAL
+	// response: its status, body and headers; latency covers the whole
+	// chain. 303, and 301/302 after a POST, continue as GET without the
+	// body; 307/308 repeat method and body. false reports the 3xx
+	// itself. Step.FollowRedirects overrides this per step.
+	FollowRedirects *bool `yaml:"follow_redirects,omitempty"`
+	// MaxRedirects caps the hops followed per step. Default 10.
+	MaxRedirects int `yaml:"max_redirects,omitempty"`
 }
+
+// CookiesEnabled reports whether virtual users keep cookies (default
+// true).
+func (t *Target) CookiesEnabled() bool { return t.Cookies == nil || *t.Cookies }
+
+// FollowsRedirects reports the target-level redirect default (true
+// unless follow_redirects: false).
+func (t *Target) FollowsRedirects() bool { return t.FollowRedirects == nil || *t.FollowRedirects }
+
+// DefaultMaxRedirects is used when Target.MaxRedirects is 0;
+// MaxRedirectsLimit is the largest accepted value.
+const (
+	DefaultMaxRedirects = 10
+	MaxRedirectsLimit   = 50
+)
 
 // LoadModel selects how load is generated.
 type LoadModel string
@@ -94,6 +129,9 @@ type Step struct {
 	ThinkTime Duration          `yaml:"think_time,omitempty"` // sleep after the step
 	Extract   []Extract         `yaml:"extract,omitempty"`
 	Assert    []Assert          `yaml:"assert,omitempty"` // http only
+	// FollowRedirects overrides Target.FollowRedirects for this step
+	// (http only). Set false to measure or assert a 3xx response itself.
+	FollowRedirects *bool `yaml:"follow_redirects,omitempty"`
 	// WS configures a ws step; required iff Type is ws.
 	WS *WSStep `yaml:"ws,omitempty"`
 }

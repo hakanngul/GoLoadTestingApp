@@ -32,6 +32,12 @@ type Executor interface {
 	// `intended` (the scheduled start), not from when the request was
 	// actually sent. Later steps measure from their own start.
 	//
+	// Virtual user identity: ctx may carry the virtual user's Session
+	// (WithSession), which holds its cookie jar. The engine attaches one
+	// per VU in the closed model and none in the open model; an executor
+	// that finds none treats the iteration as a new visitor (a fresh
+	// Session for this iteration, see EnsureSession).
+	//
 	// sink is called once per executed step. If a step fails, the
 	// iteration stops after reporting it. Iterate returns when done or
 	// when ctx is cancelled.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
@@ -43,14 +44,58 @@ type Trace struct {
 	// holds only a prefix of it.
 	BodyBytes     int64
 	BodyTruncated bool
-	// Location is the resolved redirect target of a 3xx response.
+	// Location is the resolved redirect target of a final 3xx response
+	// (one that was not followed).
 	Location string
+
+	// Hops are the redirects that were followed before the final
+	// response, in order; FinalURL is the URL that produced the final
+	// response ("" when no redirect was followed, i.e. it is URL).
+	Hops     []HopTrace
+	FinalURL string
+	// CookiesSent names the cookies sent with the final request,
+	// CookiesSet those the final response set (names only).
+	CookiesSent []string
+	CookiesSet  []string
 
 	Checks   []CheckTrace
 	Extracts []ExtractTrace
 
 	Latency time.Duration
 	Err     error // the step's Result.Err
+}
+
+// HopTrace is one followed redirect: the request that was answered with a
+// 3xx and where that sent the step next. Cookies are names only.
+type HopTrace struct {
+	Method      string
+	URL         string
+	Status      int
+	Location    string // resolved target, i.e. the next request's URL
+	CookiesSent []string
+	CookiesSet  []string
+}
+
+// cookieHeaderNames lists the cookie names in a Cookie header value.
+func cookieHeaderNames(v string) []string {
+	var out []string
+	for v != "" {
+		var part string
+		part, v, _ = strings.Cut(v, ";")
+		if n, _, _ := strings.Cut(strings.TrimSpace(part), "="); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// setCookieNames lists the names of the cookies a response sets.
+func setCookieNames(resp *http.Response) []string {
+	var out []string
+	for _, c := range resp.Cookies() {
+		out = append(out, c.Name)
+	}
+	return out
 }
 
 // CheckTrace is the outcome of one assertion.

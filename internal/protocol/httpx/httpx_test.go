@@ -277,11 +277,14 @@ func TestRegexWithoutGroupAndHostHeader(t *testing.T) {
 }
 
 func TestRedirectNotFollowed(t *testing.T) {
+	// With follow_redirects: false the 3xx itself is measured and checked
+	// (the only behaviour before redirects were followed by default).
 	srv := testServer(t)
 	e := newExec(t, srv.URL, scenario.Step{
-		Path:    "/redirect",
-		Assert:  []scenario.Assert{{Type: scenario.AssertStatus, Value: "302"}},
-		Extract: []scenario.Extract{{Var: "loc", From: scenario.FromHeader, Expr: "Location"}},
+		Path:            "/redirect",
+		FollowRedirects: boolp(false),
+		Assert:          []scenario.Assert{{Type: scenario.AssertStatus, Value: "302"}},
+		Extract:         []scenario.Extract{{Var: "loc", From: scenario.FromHeader, Expr: "Location"}},
 	})
 	vars := map[string]string{}
 	res := run(e, vars)
@@ -292,11 +295,26 @@ func TestRedirectNotFollowed(t *testing.T) {
 		t.Errorf("loc = %q", vars["loc"])
 	}
 	// A 3xx without a status assertion is still a success (< 400).
-	e2 := newExec(t, srv.URL, scenario.Step{Path: "/redirect"})
+	e2 := newExec(t, srv.URL, scenario.Step{Path: "/redirect", FollowRedirects: boolp(false)})
 	if r := run(e2, nil); !r[0].OK() || r[0].Status != 302 {
 		t.Errorf("result = %+v", r[0])
 	}
+	// The target-level switch does the same; a step can turn it back on.
+	sc := &scenario.Scenario{
+		Target: scenario.Target{BaseURL: srv.URL, FollowRedirects: boolp(false)},
+		Steps:  []scenario.Step{{Name: "off", Path: "/redirect"}, {Name: "on", Path: "/redirect", FollowRedirects: boolp(true)}},
+	}
+	e3, err := New(sc, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e3.Close()
+	if r := run(e3, nil); len(r) != 2 || r[0].Status != 302 || r[1].Status != 200 {
+		t.Errorf("results = %+v", r)
+	}
 }
+
+func boolp(b bool) *bool { return &b }
 
 func TestTimeoutProducesErrorResult(t *testing.T) {
 	srv := testServer(t)
@@ -560,13 +578,13 @@ func TestRedirectTargetInFailure(t *testing.T) {
 	t.Cleanup(srv.Close)
 	status200 := []scenario.Assert{{Type: scenario.AssertStatus, Op: "eq", Value: "200"}}
 
-	r := run(newExec(t, srv.URL, scenario.Step{Path: "/abs", Assert: status200}), nil)
+	r := run(newExec(t, srv.URL, scenario.Step{Path: "/abs", Assert: status200, FollowRedirects: boolp(false)}), nil)
 	want := "assert status: got 301, want eq 200 (redirects to https://www.example.test:443/)"
 	if len(r) != 1 || r[0].Err == nil || r[0].Err.Error() != want {
 		t.Fatalf("abs: %+v, want %q", r, want)
 	}
 	// Relative Location is resolved against the request URL.
-	r = run(newExec(t, srv.URL, scenario.Step{Path: "/rel", Assert: status200}), nil)
+	r = run(newExec(t, srv.URL, scenario.Step{Path: "/rel", Assert: status200, FollowRedirects: boolp(false)}), nil)
 	if want := "(redirects to " + srv.URL + "/next?x=1)"; r[0].Err == nil || !strings.HasSuffix(r[0].Err.Error(), want) {
 		t.Fatalf("rel: %v, want suffix %q", r[0].Err, want)
 	}
@@ -581,7 +599,7 @@ func TestTraceDoesNotChangeOutcome(t *testing.T) {
 	srv := testServer(t)
 	var traces []*Trace
 	sc := &scenario.Scenario{Target: scenario.Target{BaseURL: srv.URL}, Steps: []scenario.Step{{
-		Name: "r", Path: "/redirect",
+		Name: "r", Path: "/redirect", FollowRedirects: boolp(false),
 		Assert: []scenario.Assert{{Type: scenario.AssertStatus, Op: "eq", Value: "200"}, {Type: scenario.AssertBodyContains, Op: "contains", Value: "zzz"}},
 	}}}
 	e, err := New(sc, Options{Trace: func(tr *Trace) { traces = append(traces, tr) }})
