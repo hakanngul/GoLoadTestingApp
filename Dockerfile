@@ -12,10 +12,10 @@ ARG NODE_VERSION=22
 
 # ---------- 1. UI (Vite) ----------
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS ui
-ARG PNPM_VERSION=10.12.1
+ARG PNPM_VERSION=10.28.0
 WORKDIR /src/web
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
-COPY web/package.json web/pnpm-lock.yaml ./
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 COPY web/ ./
