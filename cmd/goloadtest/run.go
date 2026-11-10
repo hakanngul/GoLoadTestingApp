@@ -56,6 +56,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "executor: %v\n", err)
 		return exitUsage
 	}
+	defer exec.Close()
 
 	start := time.Now()
 	col := metrics.NewCollector(start)
