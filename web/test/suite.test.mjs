@@ -1,19 +1,21 @@
 // Tests for the test-suite helpers (src/lib/suite.ts).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { describeMode, formToRequest, itemDurationS, itemTone, moveItem, progress, suiteToForm } from '../src/lib/suite.ts';
+import { describeMode, formToRequest, itemDurationS, itemTone, moveItem, newFormItem, progress, suiteToForm } from '../src/lib/suite.ts';
+
+const keep = { mode: 'keep', unit: 'users', target: '10', rampUp: '30s', hold: '5m', rampDown: '0s' };
 
 test('formToRequest trims and drops sequential-only options in parallel mode', () => {
-  const items = [{ key: 'a', test_id: 't1', workers: 2.4 }, { key: 'b', test_id: 't2', workers: -1 }];
+  const items = [{ key: 'a', test_id: 't1', workers: 2.4, load: keep }, { key: 'b', test_id: 't2', workers: -1, load: keep }];
   assert.deepEqual(
-    formToRequest({ name: ' Smoke ', description: ' d ', mode: 'sequential', stop_on_failure: true, gap_s: 5, items }),
+    formToRequest({ name: ' Smoke ', description: ' d ', mode: 'sequential', stop_on_failure: true, gap_s: 5, items }).req,
     { name: 'Smoke', description: 'd', mode: 'sequential', stop_on_failure: true, gap_ms: 5000,
       items: [{ test_id: 't1', workers: 2 }, { test_id: 't2', workers: 0 }] },
   );
-  const par = formToRequest({ name: 'x', description: '', mode: 'parallel', stop_on_failure: true, gap_s: 5, items: [] });
+  const par = formToRequest({ name: 'x', description: '', mode: 'parallel', stop_on_failure: true, gap_s: 5, items: [] }).req;
   assert.equal(par.stop_on_failure, false);
   assert.equal(par.gap_ms, 0);
-  assert.equal(formToRequest({ name: 'x', description: '', mode: 'sequential', stop_on_failure: false, gap_s: NaN, items: [] }).gap_ms, 0);
+  assert.equal(formToRequest({ name: 'x', description: '', mode: 'sequential', stop_on_failure: false, gap_s: NaN, items: [] }).req.gap_ms, 0);
 });
 
 test('suiteToForm round-trips', () => {
@@ -23,7 +25,30 @@ test('suiteToForm round-trips', () => {
   assert.equal(f.gap_s, 3);
   assert.equal(f.items[0].test_id, 't1');
   assert.ok(f.items[0].key);
-  assert.deepEqual(formToRequest(f).items, [{ test_id: 't1', workers: 0 }]);
+  assert.deepEqual(formToRequest(f).req.items, [{ test_id: 't1', workers: 0 }]);
+});
+
+test('item load overrides round-trip and report errors by item', () => {
+  const info = () => ({ model: 'closed', peak: 5 });
+  const s = { id: 's', name: 'n', description: '', mode: 'sequential', stop_on_failure: false, gap_ms: 0, created_at: '', updated_at: '',
+    items: [
+      { test_id: 't1', test_name: 'a', workers: 0 },
+      { test_id: 't1', test_name: 'a', workers: 0, load: { mode: 'profile', users: 50, ramp_up_ms: 30000, hold_ms: 300000 } },
+    ] };
+  const f = suiteToForm(s, info);
+  assert.equal(f.items[0].load.mode, 'keep');
+  assert.equal(f.items[0].load.target, '5');
+  assert.equal(f.items[1].load.target, '50');
+  const { req, errors } = formToRequest(f, info);
+  assert.deepEqual(errors, {});
+  assert.equal(req.items[0].load, undefined);
+  assert.deepEqual(req.items[1].load, { mode: 'profile', users: 50, ramp_up_ms: 30000, hold_ms: 300000, ramp_down_ms: 0 });
+
+  f.items[1].load = { ...f.items[1].load, target: '0' };
+  f.items.push({ ...newFormItem('t1', info()), load: { ...keep, mode: 'scale', unit: 'rate', target: '20' } });
+  const bad = formToRequest(f, info).errors;
+  assert.ok(bad['items[1].load.users']);
+  assert.ok(bad['items[2].load.rate']);
 });
 
 test('moveItem swaps neighbours and ignores out-of-range moves', () => {

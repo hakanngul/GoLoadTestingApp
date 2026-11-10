@@ -1,34 +1,28 @@
-import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api/client";
-import { SuiteDialog } from "../components/SuiteDialog";
-import {
-  ConfirmDialog,
-  ErrorAlert,
-  Icon,
-  Loading,
-  StatusBadge,
-} from "../components/ui";
-import { fmtDateTime, fmtSeconds, runDurationS } from "../lib/format";
-import { useAsync } from "../lib/hooks";
-import { describeMode, isActive, progress } from "../lib/suite";
+import { useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { api } from '../api/client';
+import { SuiteDialog } from '../components/SuiteDialog';
+import { ConfirmDialog, ErrorAlert, Icon, Loading, StatusBadge } from '../components/ui';
+import { fmtDateTime, fmtSeconds, runDurationS } from '../lib/format';
+import { useAsync } from '../lib/hooks';
+import { describeLoad } from '../lib/schedule';
+import { describeMode, isActive, progress } from '../lib/suite';
 
 /** One suite: its test cases, a Run button and its run history. */
 export function SuitePage() {
-  const { id = "" } = useParams();
+  const { id = '' } = useParams();
   const nav = useNavigate();
   const suite = useAsync(() => api.getSuite(id), [id]);
   const runs = useAsync(() => api.listSuiteRuns(id), [id], 5000);
   const tests = useAsync(() => api.listTests(), []);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [label, setLabel] = useState("");
+  const [label, setLabel] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
   const [delErr, setDelErr] = useState<unknown>(null);
 
-  if (suite.error && !suite.data)
-    return <ErrorAlert error={suite.error} title="Failed to load the suite" />;
+  if (suite.error && !suite.data) return <ErrorAlert error={suite.error} title="Failed to load the suite" />;
   if (!suite.data) return <Loading />;
   const s = suite.data;
   const history = runs.data ?? [];
@@ -38,10 +32,7 @@ export function SuitePage() {
     setBusy(true);
     setErr(null);
     try {
-      const r = await api.startSuite(
-        s.id,
-        label.trim() ? { label: label.trim() } : {},
-      );
+      const r = await api.startSuite(s.id, label.trim() ? { label: label.trim() } : {});
       nav(`/suite-runs/${r.id}`);
     } catch (e) {
       setErr(e);
@@ -55,7 +46,7 @@ export function SuitePage() {
     setDelErr(null);
     try {
       await api.deleteSuite(s.id);
-      nav("/suites");
+      nav('/suites');
     } catch (e) {
       setDelErr(e);
       setBusy(false);
@@ -72,7 +63,7 @@ export function SuitePage() {
           <h1>{s.name}</h1>
           <div className="page-sub">
             {describeMode(s)}
-            {s.description ? ` — ${s.description}` : ""}
+            {s.description ? ` — ${s.description}` : ''}
           </div>
         </div>
         <span className="spacer" />
@@ -103,25 +94,20 @@ export function SuitePage() {
                 <li key={`${it.test_id}-${i}`} className="suite-item">
                   <span className="suite-item-no">{i + 1}</span>
                   {it.test_name ? (
-                    <Link
-                      className="suite-item-name"
-                      to={`/tests/${it.test_id}`}
-                    >
+                    <Link className="suite-item-name" to={`/tests/${it.test_id}`}>
                       {it.test_name}
                     </Link>
                   ) : (
-                    <span
-                      className="suite-item-name muted"
-                      title="This test was deleted; the suite skips it"
-                    >
+                    <span className="suite-item-name muted" title="This test was deleted; the suite skips it">
                       deleted test
                     </span>
                   )}
-                  {it.workers > 1 && (
-                    <span className="text-2 small-text">
-                      {it.workers} workers
+                  {it.load && (
+                    <span className="suite-load-tag" title="Load override for this test in the suite">
+                      {describeLoad(it.load)}
                     </span>
                   )}
+                  {it.workers > 1 && <span className="text-2 small-text">{it.workers} workers</span>}
                 </li>
               ))}
             </ol>
@@ -151,19 +137,11 @@ export function SuitePage() {
                   onChange={(e) => setLabel(e.target.value)}
                 />
               </div>
-              <button
-                className="btn primary"
-                onClick={start}
-                disabled={busy || s.items.length === 0}
-              >
-                <Icon name="play" size={12} />{" "}
-                {busy
-                  ? "Starting…"
-                  : `Run ${s.items.length} test${s.items.length === 1 ? "" : "s"}`}
+              <button className="btn primary" onClick={start} disabled={busy || s.items.length === 0}>
+                <Icon name="play" size={12} /> {busy ? 'Starting…' : `Run ${s.items.length} test${s.items.length === 1 ? '' : 's'}`}
               </button>
               <p className="hint" style={{ margin: 0 }}>
-                Each test runs with its own saved load settings; every run also
-                appears under Runs.
+                Each test runs with its own saved load settings; every run also appears under Runs.
               </p>
             </div>
           )}
@@ -193,16 +171,9 @@ export function SuitePage() {
                 {history.map((r) => {
                   const p = progress(r);
                   return (
-                    <tr
-                      key={r.id}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => nav(`/suite-runs/${r.id}`)}
-                    >
+                    <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => nav(`/suite-runs/${r.id}`)}>
                       <td>
-                        <Link
-                          to={`/suite-runs/${r.id}`}
-                          onClick={(e) => e.stopPropagation()}
-                        >
+                        <Link to={`/suite-runs/${r.id}`} onClick={(e) => e.stopPropagation()}>
                           {fmtDateTime(r.started_at)}
                         </Link>
                       </td>
@@ -212,12 +183,10 @@ export function SuitePage() {
                       <td className="text-2">
                         {isActive(r)
                           ? `${p.done}/${p.total} done`
-                          : `${p.passed} passed${p.failed ? ` · ${p.failed} failed` : ""}${p.skipped ? ` · ${p.skipped} skipped` : ""}`}
+                          : `${p.passed} passed${p.failed ? ` · ${p.failed} failed` : ''}${p.skipped ? ` · ${p.skipped} skipped` : ''}`}
                       </td>
-                      <td className="num-left">
-                        {fmtSeconds(runDurationS(r.started_at, r.finished_at))}
-                      </td>
-                      <td className="text-2">{r.label || "—"}</td>
+                      <td className="num-left">{fmtSeconds(runDurationS(r.started_at, r.finished_at))}</td>
+                      <td className="text-2">{r.label || '—'}</td>
                     </tr>
                   );
                 })}
@@ -243,8 +212,7 @@ export function SuitePage() {
           title="Delete suite?"
           message={
             <>
-              <strong>{s.name}</strong> and its run history will be deleted. The
-              tests and their runs are kept.
+              <strong>{s.name}</strong> and its run history will be deleted. The tests and their runs are kept.
             </>
           }
           busy={busy}

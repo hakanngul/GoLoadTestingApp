@@ -611,6 +611,9 @@ type SuiteItem struct {
 	TestName string `json:"test_name"`
 	// Workers for this test's run (0 = 1, local).
 	Workers int `json:"workers"`
+	// Load overrides the test's load for this item (nil = the test's own
+	// load). Applied to a copy of the scenario; the test is not changed.
+	Load *LoadOverride `json:"load,omitempty"`
 }
 
 // Suite is an ordered group of saved tests that run together.
@@ -638,7 +641,7 @@ type SuiteRequest struct {
 	Mode          SuiteMode   `json:"mode"` // "" = sequential
 	StopOnFailure bool        `json:"stop_on_failure"`
 	GapMs         int64       `json:"gap_ms"`
-	Items         []SuiteItem `json:"items"` // TestID and Workers are read
+	Items         []SuiteItem `json:"items"` // TestID, Workers and Load are read
 }
 
 // StartSuiteRequest is the body of POST /api/suites/{id}/runs.
@@ -652,6 +655,8 @@ type SuiteRunItem struct {
 	TestID   string `json:"test_id"`
 	TestName string `json:"test_name"`
 	Workers  int    `json:"workers"`
+	// Load is the item's load override (nil = the test's own load).
+	Load *LoadOverride `json:"load,omitempty"`
 	// RunID is the run started for this item ("" until started, or if it
 	// could not start).
 	RunID string `json:"run_id,omitempty"`

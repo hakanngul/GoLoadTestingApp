@@ -225,16 +225,10 @@ func Validate(spec model.ScheduleSpec, enabled bool, testYAML string, now time.T
 	if spec.QueueTimeoutMs < 0 || time.Duration(spec.QueueTimeoutMs)*time.Millisecond > MaxQueueTimeout {
 		add("queue_timeout_ms: must be between 0 and %d (24 h)", MaxQueueTimeout.Milliseconds())
 	}
-	details = append(details, validateLoad(spec.Load)...)
-	if len(details) == 0 && spec.Load != nil && testYAML != "" {
-		if _, err := ApplyLoad(testYAML, spec.Load); err != nil {
-			var ve *ValidationError
-			if errors.As(err, &ve) {
-				details = append(details, ve.Details...)
-			} else {
-				add("load: %v", err)
-			}
-		}
+	if len(details) == 0 {
+		details = append(details, CheckLoad(spec.Load, testYAML)...)
+	} else {
+		details = append(details, validateLoad(spec.Load)...)
 	}
 	if len(details) > 0 {
 		return &ValidationError{Details: details}

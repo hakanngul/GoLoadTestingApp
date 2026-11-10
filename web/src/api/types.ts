@@ -472,6 +472,8 @@ export interface SuiteItem {
   test_name: string;
   /** 0 = 1 (local). */
   workers: number;
+  /** Load override for this item (absent = the test's own load). */
+  load?: LoadOverride;
 }
 
 export interface Suite {
@@ -496,7 +498,7 @@ export interface SuiteRequest {
   mode: SuiteMode;
   stop_on_failure: boolean;
   gap_ms: number;
-  items: { test_id: string; workers: number }[];
+  items: { test_id: string; workers: number; load?: LoadOverride }[];
 }
 
 export interface StartSuiteRequest {
@@ -507,6 +509,8 @@ export interface SuiteRunItem {
   test_id: string;
   test_name: string;
   workers: number;
+  /** Load override (absent = the test's own load). */
+  load?: LoadOverride;
   run_id?: string;
   status: SuiteItemStatus;
   error?: string;

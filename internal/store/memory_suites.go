@@ -13,7 +13,12 @@ var _ SuiteStore = (*Memory)(nil)
 func cloneSuite(s model.Suite) model.Suite {
 	items := make([]model.SuiteItem, 0, len(s.Items))
 	for _, it := range s.Items {
-		items = append(items, model.SuiteItem{TestID: it.TestID, Workers: it.Workers})
+		c := model.SuiteItem{TestID: it.TestID, Workers: it.Workers}
+		if it.Load != nil {
+			l := *it.Load
+			c.Load = &l
+		}
+		items = append(items, c)
 	}
 	s.Items = items
 	s.LastRun = nil

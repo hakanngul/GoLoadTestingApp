@@ -248,9 +248,13 @@ A **suite** groups saved tests (test cases) so they run with one click:
   generator's CPU and network, so use workers or sequential mode when you
   need clean, comparable numbers.
 
-Each test runs with its own saved load settings (per-test worker count can
-be set in the suite) and also appears under **Runs** with the suite run's
-label. The suite run page shows live status, requests, RPS, p95 and error
+Each test runs with its own saved load settings by default and also appears
+under **Runs** with the suite run's label. Per test you can set the worker
+count and a **load override** (the same options as schedules: scale the
+peak, or ramp-up → hold → ramp-down with users or rate), e.g. the same test
+at 10 → 50 → 100 users for a step/capacity test. The override is applied to
+a copy of the scenario; the saved test is not changed and the run's notes
+say it ran with an override. The suite run page shows live status, requests, RPS, p95 and error
 rate per test, with links to each run's report. A suite run passes only if
 every test passed. A deleted test stays listed and is reported as an error
 when the suite runs. Suite runs that were active when the server stopped

@@ -17,16 +17,17 @@ func suiteRunLimit(f SuiteRunFilter) int {
 	return f.Limit
 }
 
-// encodeSuiteItems returns the stored JSON of suite items (TestID and
-// Workers only: names are resolved on read).
+// encodeSuiteItems returns the stored JSON of suite items (TestID, Workers
+// and Load: names are resolved on read).
 func encodeSuiteItems(items []model.SuiteItem) (string, error) {
 	type stored struct {
-		TestID  string `json:"test_id"`
-		Workers int    `json:"workers"`
+		TestID  string              `json:"test_id"`
+		Workers int                 `json:"workers"`
+		Load    *model.LoadOverride `json:"load,omitempty"`
 	}
 	out := make([]stored, 0, len(items))
 	for _, it := range items {
-		out = append(out, stored{TestID: it.TestID, Workers: it.Workers})
+		out = append(out, stored{TestID: it.TestID, Workers: it.Workers, Load: it.Load})
 	}
 	b, err := json.Marshal(out)
 	if err != nil {

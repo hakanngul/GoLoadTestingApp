@@ -1,27 +1,15 @@
-import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { api } from "../api/client";
-import { ErrorAlert, Icon, Kpi, Loading, StatusBadge } from "../components/ui";
-import {
-  fmtDateTime,
-  fmtMs,
-  fmtPct,
-  fmtRps,
-  fmtSeconds,
-  runDurationS,
-} from "../lib/format";
-import { useAsync, useNow } from "../lib/hooks";
-import {
-  describeMode,
-  isActive,
-  itemDurationS,
-  itemTone,
-  progress,
-} from "../lib/suite";
+import { useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { api } from '../api/client';
+import { ErrorAlert, Icon, Kpi, Loading, StatusBadge } from '../components/ui';
+import { fmtDateTime, fmtMs, fmtPct, fmtRps, fmtSeconds, runDurationS } from '../lib/format';
+import { useAsync, useNow } from '../lib/hooks';
+import { describeLoad } from '../lib/schedule';
+import { describeMode, isActive, itemDurationS, itemTone, progress } from '../lib/suite';
 
 /** One suite run: live progress of each test case and its key numbers. */
 export function SuiteRunPage() {
-  const { id = "" } = useParams();
+  const { id = '' } = useParams();
   const [poll, setPoll] = useState(2000);
   const run = useAsync(
     () =>
@@ -36,10 +24,7 @@ export function SuiteRunPage() {
   const [stopping, setStopping] = useState(false);
   const [err, setErr] = useState<unknown>(null);
 
-  if (run.error && !run.data)
-    return (
-      <ErrorAlert error={run.error} title="Failed to load the suite run" />
-    );
+  if (run.error && !run.data) return <ErrorAlert error={run.error} title="Failed to load the suite run" />;
   if (!run.data) return <Loading />;
   const r = run.data;
   const active = isActive(r);
@@ -58,31 +43,27 @@ export function SuiteRunPage() {
     }
   };
 
-  const elapsed = r.finished_at
-    ? runDurationS(r.started_at, r.finished_at)
-    : Math.max(0, (now - Date.parse(r.started_at)) / 1000);
+  const elapsed = r.finished_at ? runDurationS(r.started_at, r.finished_at) : Math.max(0, (now - Date.parse(r.started_at)) / 1000);
 
   return (
     <>
       <div className="page-head">
         <div>
           <div className="breadcrumb">
-            <Link to="/suites">Test suites</Link> /{" "}
-            <Link to={`/suites/${r.suite_id}`}>{r.suite_name}</Link> /
+            <Link to="/suites">Test suites</Link> / <Link to={`/suites/${r.suite_id}`}>{r.suite_name}</Link> /
           </div>
           <h1 className="row" style={{ gap: 10 }}>
             Suite run <StatusBadge status={r.status} />
           </h1>
           <div className="page-sub">
             {fmtDateTime(r.started_at)} · {describeMode(r)}
-            {r.label ? ` · ${r.label}` : ""}
+            {r.label ? ` · ${r.label}` : ''}
           </div>
         </div>
         <span className="spacer" />
         {active && (
           <button className="btn danger" onClick={stop} disabled={stopping}>
-            <Icon name="stop" size={11} />{" "}
-            {stopping ? "Stopping…" : "Stop suite"}
+            <Icon name="stop" size={11} /> {stopping ? 'Stopping…' : 'Stop suite'}
           </button>
         )}
       </div>
@@ -91,22 +72,10 @@ export function SuiteRunPage() {
       {r.error && <div className="alert bad">{r.error}</div>}
 
       <div className="kpis">
-        <Kpi
-          label="Progress"
-          value={`${p.done}/${p.total}`}
-          sub={active ? "tests finished" : "tests"}
-        />
+        <Kpi label="Progress" value={`${p.done}/${p.total}`} sub={active ? 'tests finished' : 'tests'} />
         <Kpi label="Passed" value={p.passed} />
-        <Kpi
-          label="Failed"
-          value={p.failed}
-          tone={p.failed ? "bad" : undefined}
-        />
-        <Kpi
-          label="Skipped"
-          value={p.skipped}
-          tone={p.skipped ? "warn" : undefined}
-        />
+        <Kpi label="Failed" value={p.failed} tone={p.failed ? 'bad' : undefined} />
+        <Kpi label="Skipped" value={p.skipped} tone={p.skipped ? 'warn' : undefined} />
         <Kpi label="Duration" value={fmtSeconds(elapsed)} />
       </div>
 
@@ -134,35 +103,28 @@ export function SuiteRunPage() {
                   <tr key={i}>
                     <td className="muted">{i + 1}</td>
                     <td className="name-cell">
-                      {it.test_name || (
-                        <span className="muted">deleted test</span>
+                      {it.test_name || <span className="muted">deleted test</span>}
+                      {it.load && (
+                        <div className="sub">
+                          <span className="suite-load-tag" title="Ran with a load override, not the test's saved load">
+                            override: {describeLoad(it.load)}
+                          </span>
+                        </div>
                       )}
                       {it.error && <div className="sub bad">{it.error}</div>}
                     </td>
                     <td>
-                      <span className={`badge ${itemTone(it.status)}`}>
-                        {it.status}
-                      </span>
+                      <span className={`badge ${itemTone(it.status)}`}>{it.status}</span>
                     </td>
-                    <td className="num">
-                      {d === undefined ? "—" : fmtSeconds(d)}
-                    </td>
-                    <td className="num">
-                      {sum ? sum.requests.toLocaleString() : "—"}
-                    </td>
-                    <td className="num">{sum ? fmtRps(sum.rps) : "—"}</td>
-                    <td className="num">{sum ? fmtMs(sum.p95_ms) : "—"}</td>
-                    <td
-                      className={`num ${sum && sum.error_rate > 0 ? "bad" : ""}`}
-                    >
-                      {sum ? fmtPct(sum.error_rate) : "—"}
-                    </td>
+                    <td className="num">{d === undefined ? '—' : fmtSeconds(d)}</td>
+                    <td className="num">{sum ? sum.requests.toLocaleString() : '—'}</td>
+                    <td className="num">{sum ? fmtRps(sum.rps) : '—'}</td>
+                    <td className="num">{sum ? fmtMs(sum.p95_ms) : '—'}</td>
+                    <td className={`num ${sum && sum.error_rate > 0 ? 'bad' : ''}`}>{sum ? fmtPct(sum.error_rate) : '—'}</td>
                     <td className="actions">
                       {it.run_id && (
                         <Link className="btn sm" to={`/runs/${it.run_id}`}>
-                          {it.status === "running" || it.status === "queued"
-                            ? "Live"
-                            : "Report"}
+                          {it.status === 'running' || it.status === 'queued' ? 'Live' : 'Report'}
                         </Link>
                       )}
                     </td>
@@ -175,8 +137,7 @@ export function SuiteRunPage() {
       </div>
       {active && (
         <p className="hint" style={{ marginTop: 10 }}>
-          Updates every 2 seconds. Open a test&apos;s live view for per-second
-          charts.
+          Updates every 2 seconds. Open a test&apos;s live view for per-second charts.
         </p>
       )}
     </>
