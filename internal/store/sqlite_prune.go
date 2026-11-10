@@ -107,7 +107,11 @@ func (s *SQLite) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool
 	deleted := make(map[string]bool, len(cands))
 	for start := 0; start < len(cands); start += sqlitePruneChunk {
 		chunk := cands[start:min(start+sqlitePruneChunk, len(cands))]
+		// Only report a chunk's deletions once its transaction commits; a
+		// rollback leaves those runs in place.
+		var done []string
 		err := sqliteTx(ctx, s.w, func(tx *sql.Tx) error {
+			done = done[:0]
 			stmt, err := tx.PrepareContext(ctx, sqlitePruneDeleteSQL)
 			if err != nil {
 				return sqliteErr(err)
@@ -119,13 +123,16 @@ func (s *SQLite) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool
 					return err
 				}
 				if ok {
-					deleted[p.ID] = true
+					done = append(done, p.ID)
 				}
 			}
 			return nil
 		})
 		if err != nil {
 			return pickPruned(cands, deleted), err
+		}
+		for _, id := range done {
+			deleted[id] = true
 		}
 	}
 	out := pickPruned(cands, deleted)
