@@ -85,7 +85,7 @@ function TryResultView({
   const [open, setOpen] = useState<Set<number>>(() => new Set(firstFailed >= 0 ? [firstFailed] : []));
   const [applied, setApplied] = useState<Set<number>>(new Set());
   const hints = sortHints(result.hints);
-  const dataKeys = Object.keys(result.data ?? {}).sort();
+  const dataKeys = Object.keys(result.data ?? {}).sort((a, b) => a.localeCompare(b));
 
   const toggle = (i: number) =>
     setOpen((o) => {
