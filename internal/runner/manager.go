@@ -277,6 +277,7 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 		Warnings:   []string{},
 		Label:      label,
 		Notes:      req.Notes,
+		ScheduleID: req.ScheduleID,
 	})
 	if err != nil {
 		if plan == nil {

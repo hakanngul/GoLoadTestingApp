@@ -16,6 +16,7 @@ const RunPage = lazy(() => import('./pages/RunPage').then((m) => ({ default: m.R
 const ComparePage = lazy(() => import('./pages/ComparePage').then((m) => ({ default: m.ComparePage })));
 const ReportsPage = lazy(() => import('./pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const TestReportPage = lazy(() => import('./pages/TestReportPage').then((m) => ({ default: m.TestReportPage })));
+const SchedulesPage = lazy(() => import('./pages/SchedulesPage').then((m) => ({ default: m.SchedulesPage })));
 const WorkersPage = lazy(() => import('./pages/WorkersPage').then((m) => ({ default: m.WorkersPage })));
 
 /**
@@ -64,6 +65,9 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             <NavLink to="/runs">
               <Icon name="runs" /> Runs
             </NavLink>
+            <NavLink to="/schedules">
+              <Icon name="calendar" /> Schedules
+            </NavLink>
             <NavLink to="/reports">
               <Icon name="reports" /> Reports
             </NavLink>
@@ -99,6 +103,7 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             <Route path="/tests/:id" element={<TestEditorPage />} />
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/runs/:id" element={<RunPage />} />
+            <Route path="/schedules" element={<SchedulesPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/reports/tests/:id" element={<TestReportPage />} />
             <Route path="/compare" element={<ComparePage />} />

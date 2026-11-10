@@ -336,6 +336,7 @@ func (r *fakeRunner) Start(ctx context.Context, t model.Test, req model.StartRun
 	run, err := r.store.CreateRun(ctx, model.Run{
 		TestID: t.ID, TestName: t.Name, Status: model.RunRunning, YAML: t.YAML,
 		Workers: max(req.Workers, 1), StartedAt: time.Now(), Label: req.Label, Notes: req.Notes,
+		ScheduleID: req.ScheduleID,
 	})
 	if err != nil {
 		return model.Run{}, err

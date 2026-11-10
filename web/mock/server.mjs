@@ -796,6 +796,197 @@ console.log(`[mock] live run ${liveRun.id} (catalog-soak) in progress`);
 const queuedRun = createRun('t_9c1e44a0', 4, 42, 42 + QUEUE_S);
 console.log(`[mock] queued run ${queuedRun.id} (smoke) waiting ${QUEUE_S}s for workers`);
 
+
+// ---------------------------------------------------------------- schedules
+// A small cron evaluator (numbers, *, ranges, lists, steps; day-of-month AND
+// day-of-week) good enough for the mock; the server's is in internal/scheduler.
+const schedules = new Map();
+const fmtCache = new Map();
+function wallParts(ms, tz) {
+  let f = fmtCache.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      weekday: 'short', hourCycle: 'h23',
+    });
+    fmtCache.set(tz, f);
+  }
+  const o = {};
+  for (const p of f.formatToParts(new Date(ms))) o[p.type] = p.value;
+  const dow = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[o.weekday];
+  return { y: +o.year, mo: +o.month, d: +o.day, h: +o.hour, mi: +o.minute, dow };
+}
+function cronField(spec, min, max) {
+  const set = new Set();
+  for (const item of spec.split(',')) {
+    const [rng, stepS] = item.split('/');
+    const step = stepS ? Number(stepS) : 1;
+    if (!Number.isInteger(step) || step < 1) return null;
+    let lo;
+    let hi;
+    if (rng === '*') [lo, hi] = [min, max];
+    else if (rng.includes('-')) [lo, hi] = rng.split('-').map(Number);
+    else [lo, hi] = [Number(rng), stepS ? max : Number(rng)];
+    if (![lo, hi].every(Number.isInteger) || lo < min || hi > max || lo > hi) return null;
+    for (let v = lo; v <= hi; v += step) set.add(v === 7 && max === 7 ? 0 : v);
+  }
+  return set;
+}
+const MACROS = { '@hourly': '0 * * * *', '@daily': '0 0 * * *', '@midnight': '0 0 * * *', '@weekly': '0 0 * * 0', '@monthly': '0 0 1 * *' };
+function parseCronMock(expr) {
+  const f = (MACROS[String(expr).trim().toLowerCase()] ?? String(expr)).trim().split(/\s+/);
+  if (f.length !== 5) return { error: `cron: must have 5 fields (minute hour day-of-month month day-of-week), got ${f.length}` };
+  const names = ['minute', 'hour', 'day-of-month', 'month', 'day-of-week'];
+  const ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+  const sets = [];
+  for (let i = 0; i < 5; i++) {
+    const s = cronField(f[i], ...ranges[i]);
+    if (!s) return { error: `cron: ${names[i]}: invalid field "${f[i]}"` };
+    sets.push(s);
+  }
+  return { sets };
+}
+function tzOk(tz) {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz });
+    return !!tz && tz.toLowerCase() !== 'local';
+  } catch {
+    return false;
+  }
+}
+function atToInstant(at, tz) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(at || '');
+  if (!m) return NaN;
+  const guess = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+  const w = wallParts(guess, tz);
+  const off = Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi) - guess;
+  return guess - off;
+}
+function nextTimes(def, from, count) {
+  if (def.kind === 'once') {
+    const t = atToInstant(def.at, def.timezone);
+    return Number.isFinite(t) && t > from ? [t] : [];
+  }
+  const { sets } = parseCronMock(def.cron);
+  if (!sets) return [];
+  const out = [];
+  let t = Math.floor(from / 60000) * 60000 + 60000;
+  const end = from + 40 * 86400e3;
+  while (out.length < count && t < end) {
+    const w = wallParts(t, def.timezone);
+    if (sets[3].has(w.mo) && sets[2].has(w.d) && sets[4].has(w.dow) && sets[1].has(w.h) && sets[0].has(w.mi)) out.push(t);
+    t += sets[1].has(w.h) ? 60000 : 3600e3 - w.mi * 60000;
+  }
+  return out;
+}
+function timingErrors(def, from) {
+  const errs = [];
+  if (!tzOk(def.timezone)) errs.push(`timezone: unknown time zone "${def.timezone}"`);
+  if (def.kind === 'once') {
+    if (!def.at) errs.push('at: required for a once schedule');
+    else if (!Number.isFinite(atToInstant(def.at, tzOk(def.timezone) ? def.timezone : 'UTC')))
+      errs.push(`at: must be a local date and time like 2026-05-01T03:00, got "${def.at}"`);
+    else if (errs.length === 0 && atToInstant(def.at, def.timezone) <= from) errs.push('at: must be in the future');
+  } else if (def.kind === 'recurring') {
+    if (!def.cron) errs.push('cron: required for a recurring schedule');
+    else {
+      const p = parseCronMock(def.cron);
+      if (p.error) errs.push(p.error);
+    }
+  } else errs.push(`kind: must be "once" or "recurring", got "${def.kind}"`);
+  return errs;
+}
+function validateSchedule(body) {
+  const errs = [];
+  const t = tests.get(body.test_id);
+  if (!t) errs.push('test_id: no such test');
+  if (!String(body.name ?? '').trim()) errs.push('name: must be between 1 and 200 characters');
+  const enabled = body.enabled !== false;
+  const timing = timingErrors({ ...body, timezone: body.timezone || 'UTC' }, Date.now());
+  errs.push(...(enabled ? timing : timing.filter((e) => !e.includes('in the future'))));
+  if (!(body.workers >= 0 && body.workers <= 1000)) errs.push('workers: must be between 0 and 1000');
+  if (String(body.label ?? '').length > 100) errs.push('label: must be at most 100 characters');
+  if (!['skip', 'queue', undefined, ''].includes(body.overlap)) errs.push(`overlap: must be "skip" or "queue", got "${body.overlap}"`);
+  const l = body.load;
+  if (l) {
+    if (!['scale', 'profile'].includes(l.mode)) errs.push(`load.mode: must be "scale" or "profile", got "${l.mode}"`);
+    if ((l.users > 0) === (l.rate > 0)) errs.push('load: set either users (closed model) or rate (open model), not both');
+    if (l.mode === 'profile' && !(l.hold_ms >= 1000)) errs.push('load.hold_ms: must be at least 1000 (1 s)');
+    if (l.mode === 'scale' && t) {
+      const model = scenarioMeta(t.yaml).model;
+      if (l.users && model !== 'closed')
+        errs.push('load.users: the scenario uses the open model (iterations per second); scale it with rate, or use a ramp/hold profile with users');
+      if (l.rate && model === 'closed')
+        errs.push('load.rate: the scenario uses the closed model (virtual users); scale it with users, or use a ramp/hold profile with rate');
+    }
+  }
+  return errs;
+}
+function saveSchedule(body, prev) {
+  const enabled = body.enabled !== false;
+  const sc = {
+    ...(prev ?? { id: 's_' + hex(8), created_at: iso(Date.now()) }),
+    test_id: body.test_id,
+    test_name: tests.get(body.test_id)?.name ?? '',
+    name: String(body.name).trim(),
+    kind: body.kind,
+    at: body.kind === 'once' ? body.at : undefined,
+    cron: body.kind === 'recurring' ? String(body.cron).trim().split(/\s+/).join(' ') : undefined,
+    timezone: body.timezone || 'UTC',
+    load: body.load || undefined,
+    workers: body.workers || 0,
+    label: String(body.label ?? '').trim(),
+    notes: String(body.notes ?? ''),
+    overlap: body.overlap || 'skip',
+    queue_timeout_ms: body.queue_timeout_ms || undefined,
+    enabled,
+    updated_at: iso(Date.now()),
+  };
+  const next = enabled ? nextTimes(sc, Date.now(), 1)[0] : undefined;
+  sc.next_run_at = next ? iso(next) : undefined;
+  if (!next) sc.enabled = false;
+  schedules.set(sc.id, sc);
+  return sc;
+}
+function seedSchedules() {
+  const soakRuns = [...runs.values()]
+    .filter((r) => r.test_id === 't_27d5b9f8' && r.status !== 'running')
+    .sort((x, y) => y.started_at.localeCompare(x.started_at));
+  const lastSoak = soakRuns[0];
+  const nightly = saveSchedule({
+    test_id: 't_27d5b9f8', name: 'Nightly soak', kind: 'recurring', cron: '0 3 * * 1-5', timezone: 'Europe/Istanbul',
+    load: { mode: 'scale', rate: 400 }, workers: 2, label: '', notes: 'Capacity check before the morning traffic', overlap: 'queue',
+    queue_timeout_ms: 1800000,
+  });
+  if (lastSoak) {
+    lastSoak.schedule_id = nightly.id;
+    lastSoak.label = lastSoak.label || 'scheduled: Nightly soak';
+    Object.assign(nightly, { last_run_at: lastSoak.started_at, last_run_id: lastSoak.id, last_status: 'started' });
+  }
+  const tomorrow = new Date(Date.now() + 86400e3);
+  const w = wallParts(tomorrow.getTime(), 'Europe/Berlin');
+  const pad = (n) => String(n).padStart(2, '0');
+  saveSchedule({
+    test_id: 't_9c1e44a0', name: 'Release smoke', kind: 'once', at: `${w.y}-${pad(w.mo)}-${pad(w.d)}T09:30`, timezone: 'Europe/Berlin',
+    load: { mode: 'profile', users: 20, ramp_up_ms: 30000, hold_ms: 300000, ramp_down_ms: 15000 }, workers: 1, label: 'release-2.3',
+    notes: '', overlap: 'skip',
+  });
+  const hourly = saveSchedule({
+    test_id: 't_4b7f02d3', name: 'Login canary', kind: 'recurring', cron: '15 * * * *', timezone: 'UTC',
+    workers: 1, label: '', notes: '', overlap: 'skip',
+  });
+  Object.assign(hourly, {
+    last_run_at: iso(Math.floor(Date.now() / 3600e3) * 3600e3 + 15 * 60e3 - (Date.now() % 3600e3 < 15 * 60e3 ? 3600e3 : 0)),
+    last_status: 'skipped', last_message: 'another run was active (overlap policy: skip)',
+  });
+  const weekly = saveSchedule({
+    test_id: 't_e81a6c57', name: 'Weekend spike', kind: 'recurring', cron: '0 10 * * 0,6', timezone: 'America/New_York',
+    load: { mode: 'profile', rate: 150, ramp_up_ms: 60000, hold_ms: 600000 }, workers: 4, label: '', notes: '', overlap: 'skip',
+    enabled: false,
+  });
+  Object.assign(weekly, { last_run_at: iso(Date.now() - 5 * 86400e3), last_status: 'missed', last_message: 'the server was not running at 2026-11-08 10:00 EST' });
+}
+
 // ---------------------------------------------------------------- workers
 function workers() {
   const runningId = [...runs.values()].find((r) => r.status === 'running')?.id;
@@ -1296,6 +1487,7 @@ const server = createServer(async (req, res) => {
         }
         if (m === 'DELETE') {
           tests.delete(b);
+          for (const [sid, sc] of schedules) if (sc.test_id === b) schedules.delete(sid);
           return send(res, 204);
         }
       }
@@ -1456,6 +1648,56 @@ const server = createServer(async (req, res) => {
       return apiErr(res, 405, 'method not allowed');
     }
 
+    if (a === 'schedules') {
+      if (b === 'preview' && m === 'POST') {
+        const body = (await readJSON(req)) || {};
+        const def = { ...body, timezone: body.timezone || 'UTC' };
+        const errors = timingErrors(def, Date.now());
+        if (errors.length) return send(res, 200, { valid: false, errors, times: [] });
+        const count = Math.min(50, Math.max(1, Number(body.count) || 5));
+        return send(res, 200, { valid: true, errors: [], times: nextTimes(def, Date.now(), count).map(iso) });
+      }
+      if (!b) {
+        if (m === 'GET') {
+          const testId = url.searchParams.get('test_id');
+          let list = [...schedules.values()].sort((x, y) => x.created_at.localeCompare(y.created_at));
+          if (testId) list = list.filter((x) => x.test_id === testId);
+          return send(res, 200, list);
+        }
+        if (m === 'POST') {
+          const body = (await readJSON(req)) || {};
+          const errs = validateSchedule(body);
+          if (errs.length) return apiErr(res, 400, 'invalid schedule', errs);
+          return send(res, 201, saveSchedule(body));
+        }
+      }
+      const sc = schedules.get(b);
+      if (!sc) return apiErr(res, 404, 'not found');
+      if (!c) {
+        if (m === 'GET') return send(res, 200, sc);
+        if (m === 'PUT') {
+          const body = (await readJSON(req)) || {};
+          const errs = validateSchedule(body);
+          if (errs.length) return apiErr(res, 400, 'invalid schedule', errs);
+          return send(res, 200, saveSchedule(body, sc));
+        }
+        if (m === 'DELETE') {
+          schedules.delete(b);
+          return send(res, 204);
+        }
+      }
+      if (c === 'run-now' && m === 'POST') {
+        const run = createRun(sc.test_id, Math.max(1, sc.workers), 0, 0, {
+          label: sc.label || `scheduled: ${sc.name}`,
+          notes: sc.notes,
+        });
+        run.schedule_id = sc.id;
+        Object.assign(sc, { last_run_at: run.started_at, last_run_id: run.id, last_status: 'started', last_message: undefined });
+        return send(res, 201, run);
+      }
+      return apiErr(res, 405, 'method not allowed');
+    }
+
     if (a === 'workers' && m === 'GET') return send(res, 200, workers());
 
     if (a === 'compare' && m === 'GET') {
@@ -1489,4 +1731,5 @@ const server = createServer(async (req, res) => {
   }
 });
 
+seedSchedules();
 server.listen(PORT, () => console.log(`[mock] GoLoad mock API on http://localhost:${PORT}`));

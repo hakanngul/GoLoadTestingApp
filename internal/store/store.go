@@ -117,3 +117,48 @@ type Pruner interface {
 	// returned together with the error.
 	PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool) ([]PrunedRun, error)
 }
+
+// ScheduleResult is the outcome of a schedule occurrence (model.Schedule
+// LastRunAt / LastRunID / LastStatus / LastMessage).
+type ScheduleResult struct {
+	At      time.Time // LastRunAt; zero keeps the stored value
+	RunID   string    // LastRunID (replaced, "" clears)
+	Status  string    // LastStatus
+	Message string    // LastMessage
+}
+
+// ScheduleAdvance moves a due schedule past an occurrence (see
+// ScheduleStore.AdvanceSchedule).
+type ScheduleAdvance struct {
+	NextRunAt *time.Time // nil = no further occurrence
+	Enabled   bool
+	Result    ScheduleResult
+}
+
+// ScheduleStore is the schedule side of a store. Every Store in this
+// package implements it; it is a separate interface so test doubles of
+// Store need not. Schedules are deleted with their test.
+type ScheduleStore interface {
+	// ListSchedules returns schedules (of one test when testID != ""),
+	// oldest created first, TestName filled.
+	ListSchedules(ctx context.Context, testID string) ([]model.Schedule, error)
+	GetSchedule(ctx context.Context, id string) (model.Schedule, error)
+	// CreateSchedule stores the spec, Enabled and NextRunAt of s with a
+	// fresh ID and timestamps (the Last* fields start empty). Unknown
+	// test: ErrNotFound.
+	CreateSchedule(ctx context.Context, s model.Schedule) (model.Schedule, error)
+	// UpdateSchedule replaces the spec, Enabled and NextRunAt of an
+	// existing schedule and bumps UpdatedAt; the Last* fields are kept.
+	UpdateSchedule(ctx context.Context, s model.Schedule) (model.Schedule, error)
+	DeleteSchedule(ctx context.Context, id string) error
+	// AdvanceSchedule atomically records an occurrence: only if the
+	// schedule is enabled and its next_run_at equals due (compare and
+	// set, microsecond precision) are NextRunAt, Enabled and the result
+	// stored; otherwise ErrConflict (someone else handled or edited it).
+	// This is what makes firing exactly-once across restarts and
+	// concurrent edits. UpdatedAt is not changed.
+	AdvanceSchedule(ctx context.Context, id string, due time.Time, a ScheduleAdvance) (model.Schedule, error)
+	// SetScheduleResult replaces the Last* fields. UpdatedAt is not
+	// changed.
+	SetScheduleResult(ctx context.Context, id string, r ScheduleResult) (model.Schedule, error)
+}

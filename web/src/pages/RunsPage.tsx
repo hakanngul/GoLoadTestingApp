@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { RunLabel } from '../components/report';
-import { ErrorAlert, Icon, Loading, StatusBadge } from '../components/ui';
+import { ErrorAlert, Icon, Loading, ScheduledBadge, StatusBadge } from '../components/ui';
 import { fmtDateTime, fmtInt, fmtMs, fmtPct, fmtRps, fmtSeconds, runDurationS, shortId, timeAgo } from '../lib/format';
 import { useAsync, useNow } from '../lib/hooks';
 
@@ -115,7 +115,10 @@ export function RunsPage() {
                       </td>
                       <td style={{ fontWeight: 600 }}>{r.test_name}</td>
                       <td title={r.notes || undefined}>
-                        {r.label ? <RunLabel label={r.label} /> : <span className="muted">—</span>}
+                        <span className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+                          {r.label ? <RunLabel label={r.label} /> : !r.schedule_id && <span className="muted">—</span>}
+                          <ScheduledBadge scheduleId={r.schedule_id} />
+                        </span>
                       </td>
                       <td>
                         <StatusBadge status={r.status} />

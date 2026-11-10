@@ -25,6 +25,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
 	"github.com/hakanngul/GoLoadTestingApp/internal/provision"
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
+	"github.com/hakanngul/GoLoadTestingApp/internal/scheduler"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
 	"github.com/hakanngul/GoLoadTestingApp/web"
 )
@@ -143,6 +144,19 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	}
 	mgr := runner.NewManager(ropts)
 
+	// The scheduler starts planned runs through mgr (same allowlist and
+	// validation as the API). Every built-in store supports schedules.
+	var sched *scheduler.Scheduler
+	schedDone := make(chan struct{})
+	schedCtx, stopSched := context.WithCancel(context.Background())
+	defer stopSched()
+	if ss, ok := st.(scheduler.Store); ok {
+		sched = scheduler.New(scheduler.Options{Store: ss, Runner: mgr, Logger: log})
+		go func() { sched.Run(schedCtx); close(schedDone) }()
+	} else {
+		close(schedDone)
+	}
+
 	ui, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
 		fmt.Fprintf(stderr, "ui: %v\n", err)
@@ -153,6 +167,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		Handler: api.NewServer(api.Config{
 			Store: st, Runner: mgr, UI: ui, Version: version,
 			Logger: log, AuthToken: *token, DevCORS: *devCORS, Retention: retention,
+			Scheduler: schedulerOrNil(sched),
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -176,6 +191,12 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// Stop scheduling first so no new run starts while runs are stopped.
+	stopSched()
+	select {
+	case <-schedDone:
+	case <-shutdownCtx.Done():
+	}
 	if err := mgr.Shutdown(shutdownCtx); err != nil {
 		log.Warn("stop active runs", "error", err)
 	}
@@ -183,6 +204,15 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		log.Warn("http shutdown", "error", err)
 	}
 	return exitOK
+}
+
+// schedulerOrNil keeps a nil *Scheduler from becoming a non-nil
+// api.Scheduler interface value.
+func schedulerOrNil(s *scheduler.Scheduler) api.Scheduler {
+	if s == nil {
+		return nil
+	}
+	return s
 }
 
 // defaultDB is the -db default: a SQLite file in the working directory,

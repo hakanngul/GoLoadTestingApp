@@ -160,6 +160,54 @@ Hints explain the usual reasons a run fails with 100% errors: a **redirect** (Go
 
 In runs, a failing `3xx` now names its target, e.g. `assert status: got 301, want eq 200 (redirects to https://www.example.com:443/)`.
 
+## Scheduled tests
+
+Plan runs of a saved test: **once** at a date and time, or **recurring**
+(daily, weekdays, chosen weekdays at HH:MM, or any 5-field cron expression
+such as `*/30 8-18 * * 1-5`). Use the **Schedule** button on a test (list or
+editor) or the **Schedules** page; the API is `/api/schedules` (see
+`internal/api/doc.go`).
+
+Each schedule can override what a run does, without changing the saved test:
+
+- **Load** — *Scenario load* (as saved), *Scale peak* (keep the stage shape
+  and model, scale every stage so the peak becomes N VUs or N it/s; the unit
+  must match the scenario's model), or *Ramp & hold* (replace the stages with
+  ramp-up → hold → optional ramp-down; VUs selects the closed model, it/s the
+  open model; ramp-up 0 reaches full load within 1 s). The override is applied
+  to a copy of the scenario when the schedule fires and validated like any run;
+  the run's frozen YAML shows exactly what ran.
+- **Workers**, **run label** (default `scheduled: <name>`) and **notes**.
+- **Overlap** — when another run is active on the server: *skip* this
+  occurrence (default) or *wait* up to N minutes (default 30) and then run it
+  (or record it as skipped).
+
+Runs started by a schedule carry `schedule_id` and show a **scheduled** badge
+linking back to it. *Run now* starts a run with the schedule's settings
+immediately (it ignores timing and the overlap policy).
+
+Semantics worth knowing:
+
+- **The server must be running at fire time.** Schedules run inside
+  `goloadtest serve`; there is no external cron.
+- **Missed runs are not run late.** An occurrence found more than 1 minute
+  after it was due (e.g. the server was down) is recorded as `missed` and the
+  schedule moves on to its next time. An occurrence that was waiting (queue)
+  when the server stopped is also recorded as `missed`.
+- **Exactly once.** The next fire time is advanced in the database with a
+  compare-and-set before a run starts, so restarts, concurrent edits or two
+  masters on the same Postgres never start an occurrence twice.
+- **One-time schedules** disable themselves after their occurrence (started,
+  skipped, missed or error). Each schedule shows its last result
+  (`started`/`queued`/`skipped`/`missed`/`error`, with a message and a link to
+  the run).
+- **Time zones.** Times are wall-clock times in the schedule's IANA zone
+  (default: your browser's), evaluated with daylight saving time: a time that
+  does not exist on a spring-forward day (e.g. 02:30) fires when the clock
+  jumps (03:00); a time that occurs twice on a fall-back day fires once, at
+  its first occurrence. The dialog previews the next 5 fire times.
+- Deleting a test deletes its schedules; deleting a schedule keeps its runs.
+
 ## How it measures
 
 - **Open model (default).** The target is iterations per second. Arrival times come from the integral of the ramp, so there is no drift. When `max_vus` iterations are already in flight, a new arrival is dropped and counted, never queued.

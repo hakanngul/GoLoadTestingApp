@@ -25,6 +25,7 @@ type Memory struct {
 	metrics map[string][]memMetric         // run ID -> points, sorted by T
 	errs    map[string][]model.ErrorSample // run ID -> samples, sorted by T
 	groups  map[string][]model.ErrorGroup  // run ID -> final error groups
+	scheds  map[string]*model.Schedule     // schedule ID -> schedule (TestName empty)
 }
 
 type memTest struct {
@@ -48,6 +49,7 @@ func NewMemory() *Memory {
 		metrics: make(map[string][]memMetric),
 		errs:    make(map[string][]model.ErrorSample),
 		groups:  make(map[string][]model.ErrorGroup),
+		scheds:  make(map[string]*model.Schedule),
 	}
 }
 
@@ -166,6 +168,11 @@ func (m *Memory) DeleteTest(ctx context.Context, id string) error {
 			m.deleteRunLocked(rid)
 		}
 	}
+	for sid, sc := range m.scheds {
+		if sc.TestID == id {
+			delete(m.scheds, sid)
+		}
+	}
 	return nil
 }
 
@@ -279,7 +286,7 @@ func (m *Memory) UpdateRun(ctx context.Context, r model.Run) error {
 	}
 	next := normRun(cloneRun(r))
 	next.ID, next.TestID = cur.ID, cur.TestID
-	next.Label, next.Notes = cur.Label, cur.Notes
+	next.Label, next.Notes, next.ScheduleID = cur.Label, cur.Notes, cur.ScheduleID
 	if next.StartedAt.IsZero() {
 		next.StartedAt = cur.StartedAt
 	}

@@ -233,20 +233,20 @@ type sqliteQuerier interface {
 const (
 	sqliteRunColsBare = `id, test_id, test_name, status, yaml, workers,
 	started_at, finished_at, summary, thresholds, peak_cpu, warnings, error,
-	label, notes`
+	label, notes, schedule_id`
 	sqliteRunColsR = `r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes`
+	r.label, r.notes, r.schedule_id`
 	sqliteRunColsLR = `lr.id, lr.test_id, lr.test_name, lr.status, lr.yaml, lr.workers,
 	lr.started_at, lr.finished_at, lr.summary, lr.thresholds, lr.peak_cpu, lr.warnings, lr.error,
-	lr.label, lr.notes`
+	lr.label, lr.notes, lr.schedule_id`
 	// sqliteRunColsSlimR is sqliteRunColsR with the summary's by_step
 	// removed (RunsSince).
 	sqliteRunColsSlimR = `r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at,
 	CASE WHEN json_type(r.summary) = 'object' THEN json_remove(r.summary, '$.by_step') ELSE r.summary END,
 	r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes`
+	r.label, r.notes, r.schedule_id`
 )
 
 // sqliteRunRow receives one runs row. Every field is nullable so the same
@@ -257,13 +257,13 @@ type sqliteRunRow struct {
 	startedAt, finishedAt              sql.NullInt64
 	summary, thresholds, warnings      sql.NullString
 	peakCPU                            sql.NullFloat64
-	errText, label, notes              sql.NullString
+	errText, label, notes, scheduleID  sql.NullString
 }
 
 func (r *sqliteRunRow) dest() []any {
 	return []any{&r.id, &r.testID, &r.testName, &r.status, &r.yaml, &r.workers,
 		&r.startedAt, &r.finishedAt, &r.summary, &r.thresholds, &r.peakCPU, &r.warnings, &r.errText,
-		&r.label, &r.notes}
+		&r.label, &r.notes, &r.scheduleID}
 }
 
 // run converts a scanned row; ok is false when the row was all NULL.
@@ -282,6 +282,7 @@ func (r *sqliteRunRow) run() (model.Run, bool, error) {
 		Error:      r.errText.String,
 		Label:      r.label.String,
 		Notes:      r.notes.String,
+		ScheduleID: r.scheduleID.String,
 		Thresholds: []model.ThresholdResult{},
 		Warnings:   []string{},
 	}
@@ -378,7 +379,7 @@ const sqliteListTestsSQL = `
 	(SELECT json_group_array(json_object('name', f.name, 'size', f.size) ORDER BY f.name)
 	 FROM test_files f WHERE f.test_id = t.id), lr.id, lr.test_id, lr.test_name, lr.status, lr.yaml, lr.workers,
 	lr.started_at, lr.finished_at, lr.summary, lr.thresholds, lr.peak_cpu, lr.warnings, lr.error,
-	lr.label, lr.notes
+	lr.label, lr.notes, lr.schedule_id
 		FROM tests t
 		LEFT JOIN runs lr ON lr.id = (
 			SELECT r.id FROM runs r WHERE r.test_id = t.id
@@ -581,13 +582,13 @@ func sqliteRunArgs(r model.Run) ([]any, error) {
 // sqliteCreateRunSQL inserts a run for an existing test (CreateRun).
 const sqliteCreateRunSQL = `
 		INSERT INTO runs (id, test_id, test_name, status, yaml, workers, started_at, finished_at,
-		                  summary, thresholds, peak_cpu, warnings, error, label, notes)
+		                  summary, thresholds, peak_cpu, warnings, error, label, notes, schedule_id)
 		SELECT ?, t.id, COALESCE(NULLIF(?, ''), t.name), COALESCE(NULLIF(?, ''), 'queued'),
-		       ?, ?, COALESCE(?, ?), ?, ?, ?, ?, ?, ?, ?, ?
+		       ?, ?, COALESCE(?, ?), ?, ?, ?, ?, ?, ?, ?, ?, ?
 		FROM tests t WHERE t.id = ?
 		RETURNING id, test_id, test_name, status, yaml, workers,
 	started_at, finished_at, summary, thresholds, peak_cpu, warnings, error,
-	label, notes`
+	label, notes, schedule_id`
 
 // CreateRun stores a new run for an existing test. The store assigns the
 // ID; StartedAt defaults to now, Status to queued and TestName to the
@@ -603,7 +604,7 @@ func (s *SQLite) CreateRun(ctx context.Context, r model.Run) (model.Run, error) 
 	var rr sqliteRunRow
 	err = s.w.QueryRowContext(ctx, sqliteCreateRunSQL,
 		newID(), a[0], a[1], a[2], a[3], a[4], toMicros(now()), a[5], a[6], a[7], a[8], a[9], a[10],
-		r.Label, r.Notes, r.TestID).Scan(rr.dest()...)
+		r.Label, r.Notes, r.ScheduleID, r.TestID).Scan(rr.dest()...)
 	if err != nil {
 		return model.Run{}, sqliteErr(err)
 	}
@@ -632,24 +633,24 @@ func (s *SQLite) UpdateRun(ctx context.Context, r model.Run) error {
 const (
 	sqliteGetRunSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes FROM runs r WHERE r.id = ?`
+	r.label, r.notes, r.schedule_id FROM runs r WHERE r.id = ?`
 	sqliteListRunsSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes FROM runs r
+	r.label, r.notes, r.schedule_id FROM runs r
 			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`
 	sqliteListTestRunsSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes FROM runs r WHERE r.test_id = ?
+	r.label, r.notes, r.schedule_id FROM runs r WHERE r.test_id = ?
 			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`
 	sqliteUpdateRunMetaSQL = `UPDATE runs SET label = COALESCE(?, label), notes = COALESCE(?, notes)
 		WHERE id = ? RETURNING id, test_id, test_name, status, yaml, workers,
 	started_at, finished_at, summary, thresholds, peak_cpu, warnings, error,
-	label, notes`
+	label, notes, schedule_id`
 	sqliteRunsSinceSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at,
 	CASE WHEN json_type(r.summary) = 'object' THEN json_remove(r.summary, '$.by_step') ELSE r.summary END,
 	r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes FROM runs r WHERE r.started_at >= ?
+	r.label, r.notes, r.schedule_id FROM runs r WHERE r.started_at >= ?
 		ORDER BY r.started_at DESC, r.id DESC`
 )
 

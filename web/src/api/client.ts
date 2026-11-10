@@ -9,6 +9,10 @@ import type {
   Overview,
   Run,
   RunReport,
+  Schedule,
+  SchedulePreview,
+  SchedulePreviewRequest,
+  ScheduleRequest,
   StartRunRequest,
   Test,
   TrendPoint,
@@ -199,6 +203,16 @@ export const api = {
   setBaseline: (testId: string, runId: string) =>
     request<Test>('PUT', `/api/tests/${enc(testId)}/baseline`, { run_id: runId }),
   overview: (days = 30) => request<Overview>('GET', `/api/reports/overview?days=${days}`),
+
+  // ---------- schedules ----------
+  listSchedules: (testId?: string) =>
+    request<Schedule[] | null>('GET', `/api/schedules${testId ? `?test_id=${enc(testId)}` : ''}`).then((r) => r ?? []),
+  getSchedule: (id: string) => request<Schedule>('GET', `/api/schedules/${enc(id)}`),
+  createSchedule: (req: ScheduleRequest) => request<Schedule>('POST', '/api/schedules', req),
+  updateSchedule: (id: string, req: ScheduleRequest) => request<Schedule>('PUT', `/api/schedules/${enc(id)}`, req),
+  deleteSchedule: (id: string) => request<void>('DELETE', `/api/schedules/${enc(id)}`),
+  runScheduleNow: (id: string) => request<Run>('POST', `/api/schedules/${enc(id)}/run-now`),
+  previewSchedule: (req: SchedulePreviewRequest) => request<SchedulePreview>('POST', '/api/schedules/preview', req),
 };
 
 // ---------- downloads ----------

@@ -36,6 +36,8 @@ type Config struct {
 	// Retention is the active data retention (serve -retention), reported
 	// by GET /api/health; 0 = runs are kept forever.
 	Retention time.Duration
+	// Scheduler serves /api/schedules. nil answers those routes with 503.
+	Scheduler Scheduler
 }
 
 // Limits on request bodies.
@@ -69,6 +71,7 @@ type server struct {
 	devCORS   bool
 	retention time.Duration
 	reporter  *report.Reporter
+	scheduler Scheduler
 
 	// heartbeat is the SSE keep-alive interval (overridable in tests).
 	heartbeat time.Duration
@@ -101,6 +104,7 @@ func newServer(cfg Config) *server {
 		devCORS:   cfg.DevCORS,
 		retention: cfg.Retention,
 		reporter:  report.New(cfg.Store),
+		scheduler: cfg.Scheduler,
 		heartbeat: defaultHeartbeat,
 		trySem:    make(chan struct{}, maxConcurrentTries),
 		api:       http.NewServeMux(),
@@ -146,6 +150,15 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/tests/{id}/trend", s.handleTrend)
 	m.HandleFunc("PUT /api/tests/{id}/baseline", s.handleSetBaseline)
 	m.HandleFunc("GET /api/reports/overview", s.handleOverview)
+
+	// Schedules.
+	m.HandleFunc("GET /api/schedules", s.handleListSchedules)
+	m.HandleFunc("POST /api/schedules", s.handleCreateSchedule)
+	m.HandleFunc("POST /api/schedules/preview", s.handlePreviewSchedule)
+	m.HandleFunc("GET /api/schedules/{id}", s.handleGetSchedule)
+	m.HandleFunc("PUT /api/schedules/{id}", s.handleUpdateSchedule)
+	m.HandleFunc("DELETE /api/schedules/{id}", s.handleDeleteSchedule)
+	m.HandleFunc("POST /api/schedules/{id}/run-now", s.handleRunScheduleNow)
 }
 
 // handler assembles the middleware chain:

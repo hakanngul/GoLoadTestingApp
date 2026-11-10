@@ -204,7 +204,7 @@ const filesExpr = `COALESCE((SELECT json_agg(json_build_object('name', f.name, '
 func runCols(alias string) string {
 	cols := []string{"id::text", "test_id::text", "test_name", "status", "yaml", "workers",
 		"started_at", "finished_at", "summary", "thresholds", "peak_cpu", "warnings", "error",
-		"label", "notes"}
+		"label", "notes", "schedule_id"}
 	for i, c := range cols {
 		cols[i] = alias + "." + c
 	}
@@ -226,13 +226,13 @@ type runRow struct {
 	summary, thresholds, warnings      []byte
 	peakCPU                            *float64
 	errText                            *string
-	label, notes                       *string
+	label, notes, scheduleID           *string
 }
 
 func (r *runRow) dest() []any {
 	return []any{&r.id, &r.testID, &r.testName, &r.status, &r.yaml, &r.workers,
 		&r.startedAt, &r.finishedAt, &r.summary, &r.thresholds, &r.peakCPU, &r.warnings, &r.errText,
-		&r.label, &r.notes}
+		&r.label, &r.notes, &r.scheduleID}
 }
 
 // run converts a scanned row; ok is false when the row was all NULL.
@@ -251,6 +251,7 @@ func (r *runRow) run() (model.Run, bool, error) {
 		Error:      deref(r.errText),
 		Label:      deref(r.label),
 		Notes:      deref(r.notes),
+		ScheduleID: deref(r.scheduleID),
 		Thresholds: []model.ThresholdResult{},
 		Warnings:   []string{},
 	}
@@ -543,16 +544,17 @@ func (p *Postgres) CreateRun(ctx context.Context, r model.Run) (model.Run, error
 		return model.Run{}, err
 	}
 	id := newID()
-	// $1 id, $2 test_id, $3.. = runArgs; $14 = now; $15 label; $16 notes.
+	// $1 id, $2 test_id, $3.. = runArgs; $14 = now; $15 label; $16 notes;
+	// $17 schedule_id.
 	row := p.pool.QueryRow(ctx, `
 		INSERT INTO runs (id, test_id, test_name, status, yaml, workers, started_at, finished_at,
-		                  summary, thresholds, peak_cpu, warnings, error, label, notes)
+		                  summary, thresholds, peak_cpu, warnings, error, label, notes, schedule_id)
 		SELECT $1::uuid, t.id, COALESCE(NULLIF($3::text, ''), t.name), COALESCE(NULLIF($4::text, ''), 'queued'),
 		       $5::text, $6::integer, COALESCE($7::timestamptz, $14::timestamptz), $8::timestamptz,
-		       $9::jsonb, $10::jsonb, $11::double precision, $12::jsonb, $13::text, $15::text, $16::text
+		       $9::jsonb, $10::jsonb, $11::double precision, $12::jsonb, $13::text, $15::text, $16::text, $17::text
 		FROM tests t WHERE t.id = $2::uuid
 		RETURNING `+runCols("runs"),
-		append([]any{id, r.TestID}, append(args, now(), r.Label, r.Notes)...)...)
+		append([]any{id, r.TestID}, append(args, now(), r.Label, r.Notes, r.ScheduleID)...)...)
 	var rr runRow
 	if err := row.Scan(rr.dest()...); err != nil {
 		return model.Run{}, mapErr(err)
