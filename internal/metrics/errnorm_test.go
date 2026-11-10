@@ -42,6 +42,13 @@ func TestNormalizeErrorMessage(t *testing.T) {
 			`Post "http://h:8080/items/{uuid}/x#{v}": EOF`},
 		{"GET http://h/a/5f2b1c9e8d7a6b5c4d3e2f10/b.", "GET http://h/a/{id}/b."},
 		{"ws://h/chat/room-123456", "ws://h/chat/room-{n}"},
+		// Redirect targets appended to 3xx failures.
+		{"assert status: got 301, want eq 200 (redirects to https://www.stageletsbet.de:443/)",
+			"assert status: got 301, want eq 200 (redirects to https://www.stageletsbet.de:443/)"},
+		{"assert status: got 302, want eq 200 (redirects to https://sso.test/login?next=%2Fa%2F77&state=8f3a9c2e1d)",
+			"assert status: got 302, want eq 200 (redirects to https://sso.test/login?next={v}&state={v})"},
+		{"assert status: got 302, want eq 200 (redirects to https://h.test/session/5f2b1c9e8d7a6b5c4d3e2f10/start)",
+			"assert status: got 302, want eq 200 (redirects to https://h.test/session/{id}/start)"},
 
 		// UUIDs.
 		{`assert json $.error: got "item 3F2504E0-4F89-11D3-9A0C-0305E82C3301 not found", want eq ok`,

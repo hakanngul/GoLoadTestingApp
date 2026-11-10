@@ -218,7 +218,7 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 		return model.Run{}, newValidationError(err)
 	}
 	if m.allow != nil {
-		for _, u := range targetURLs(sc) {
+		for _, u := range sc.TargetURLs() {
 			if err := m.allow(u); err != nil {
 				if errors.Is(err, ErrTargetNotAllowed) {
 					return model.Run{}, err
@@ -458,25 +458,6 @@ func (m *Manager) Workers() []model.Worker {
 }
 
 func baseName(p string) string { return filepath.Base(p) }
-
-// targetURLs lists every URL a scenario sends load to: the base URL plus
-// steps whose path is an absolute URL. (A path that is entirely a
-// template, e.g. "{{url}}", is resolved per iteration and cannot be
-// vetted here; see docs/security.md.)
-func targetURLs(sc *scenario.Scenario) []string {
-	urls := []string{sc.Target.BaseURL}
-	for _, st := range sc.Steps {
-		scheme, _, ok := strings.Cut(strings.ToLower(st.Path), "://")
-		if !ok {
-			continue
-		}
-		switch scheme {
-		case "http", "https", "ws", "wss":
-			urls = append(urls, st.Path)
-		}
-	}
-	return urls
-}
 
 // Shutdown rejects new runs, stops every active run gracefully (they end
 // with status stopped and are persisted) and waits for them to finish or

@@ -4,7 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/data"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 )
 
@@ -25,5 +27,21 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "ok: %q, %s model, %d step(s), %d stage(s), duration %s\n",
 		sc.Name, sc.Load.Model, len(sc.Steps), len(sc.Load.Stages), sc.Load.TotalDuration())
+
+	// {{var}} references nothing defines (warnings only). The data file's
+	// header gives the CSV columns when it can be read.
+	var columns []string
+	known := sc.Data == nil
+	if sc.Data != nil {
+		if f, err := os.Open(sc.Data.File); err == nil {
+			if h, err := data.Header(f); err == nil {
+				columns, known = h, true
+			}
+			f.Close()
+		}
+	}
+	for _, is := range sc.CheckVars(columns, known) {
+		fmt.Fprintf(stdout, "warning: %s\n", is)
+	}
 	return exitOK
 }

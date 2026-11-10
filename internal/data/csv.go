@@ -110,3 +110,29 @@ func (c *CSV) Len() int { return len(c.rows) }
 func (c *CSV) Columns() []string { return append([]string(nil), c.columns...) }
 
 var _ Feeder = (*CSV)(nil)
+
+// First returns the first data row as a fresh map (trial runs).
+func (c *CSV) First() map[string]string {
+	m := make(map[string]string, len(c.columns))
+	for i, col := range c.columns {
+		m[col] = c.rows[0][i]
+	}
+	return m
+}
+
+// Header reads only the header row of a CSV document, with the same
+// normalisation as NewCSV (BOM removed, names trimmed).
+func Header(r io.Reader) ([]string, error) {
+	header, err := csv.NewReader(r).Read()
+	if errors.Is(err, io.EOF) {
+		return nil, errors.New("data: file is empty")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("data: %w", err)
+	}
+	header[0] = strings.TrimPrefix(header[0], "\uFEFF")
+	for i := range header {
+		header[i] = strings.TrimSpace(header[i])
+	}
+	return header, nil
+}

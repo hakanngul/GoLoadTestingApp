@@ -135,6 +135,131 @@ type ValidateResult struct {
 	Model    string   `json:"model,omitempty"`
 	Duration float64  `json:"duration_s,omitempty"`
 	Steps    int      `json:"steps,omitempty"`
+	// Warnings are problems that do not prevent a run, e.g. {{var}}
+	// references no source defines ("path: message"). Always present.
+	Warnings []string `json:"warnings"`
+}
+
+// ValidateRequest is the body of POST /api/validate. TestID (optional)
+// lets the server read the header of the test's uploaded data file.
+type ValidateRequest struct {
+	YAML   string `json:"yaml"`
+	TestID string `json:"test_id,omitempty"`
+}
+
+// TryRequest is the body of POST /api/tests/try: run one iteration of a
+// (possibly unsaved) scenario. TestID (optional) lets the server use the
+// test's uploaded data file (its first row supplies the {{vars}}).
+type TryRequest struct {
+	YAML   string `json:"yaml"`
+	TestID string `json:"test_id,omitempty"`
+}
+
+// Try step states.
+const (
+	TryPassed = "passed"
+	TryFailed = "failed"
+	TryNotRun = "not_run"
+)
+
+// TryResult is the outcome of one trial iteration (POST /api/tests/try,
+// `goloadtest try`).
+type TryResult struct {
+	// OK is true when every step ran and passed.
+	OK         bool    `json:"ok"`
+	DurationMs float64 `json:"duration_ms"`
+	// Data is the CSV row used for {{vars}} (sensitive-looking values
+	// masked); empty without data.
+	Data map[string]string `json:"data"`
+	// DataNote explains why no data row was used, if the scenario has a
+	// data file that was not available.
+	DataNote string    `json:"data_note,omitempty"`
+	Steps    []TryStep `json:"steps"`
+	Hints    []TryHint `json:"hints"`
+}
+
+// TryStep reports one step of a trial iteration (the login request of
+// auth type login comes first, as step "auth:login").
+type TryStep struct {
+	Name string `json:"name"`
+	// Kind is http, ws or login.
+	Kind string `json:"kind"`
+	// Index is the position in scenario steps (-1 for auth:login).
+	Index int `json:"index"`
+	// State is passed, failed or not_run.
+	State          string      `json:"state"`
+	Method         string      `json:"method,omitempty"`
+	URL            string      `json:"url,omitempty"`
+	RequestHeaders []TryHeader `json:"request_headers"`
+	RequestBody    string      `json:"request_body,omitempty"`
+	Status         int         `json:"status"`
+	DurationMs     float64     `json:"duration_ms"`
+	Bytes          int64       `json:"bytes"`
+	// ResponseHeaders lists selected response headers (set-cookie: cookie
+	// names only).
+	ResponseHeaders []TryHeader `json:"response_headers"`
+	// Body is the start of the response body (text only, capped).
+	Body          string `json:"body,omitempty"`
+	BodyTruncated bool   `json:"body_truncated,omitempty"`
+	BodyBinary    bool   `json:"body_binary,omitempty"`
+	// Location is the resolved redirect target of a 3xx response.
+	Location   string         `json:"location,omitempty"`
+	Extracted  []TryExtract   `json:"extracted"`
+	Assertions []TryAssertion `json:"assertions"`
+	// Messages are the per-message results of a ws step.
+	Messages []TryMessage `json:"messages,omitempty"`
+	Error    string       `json:"error,omitempty"`
+}
+
+// TryHeader is one header (values of sensitive headers are masked).
+type TryHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// TryExtract is the outcome of one extract.
+type TryExtract struct {
+	Var    string `json:"var"`
+	Source string `json:"source"`
+	Expr   string `json:"expr"`
+	Value  string `json:"value,omitempty"` // truncated / masked
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
+}
+
+// TryAssertion is the outcome of one assertion.
+type TryAssertion struct {
+	Assertion string `json:"assertion"` // e.g. "status eq 200"
+	Passed    bool   `json:"passed"`
+	Message   string `json:"message,omitempty"`
+}
+
+// TryMessage is one ws message result ("<step>:<n>" or "<step>:hold").
+type TryMessage struct {
+	Name       string  `json:"name"`
+	DurationMs float64 `json:"duration_ms"`
+	Error      string  `json:"error,omitempty"`
+}
+
+// TryHint is a diagnosis computed from a trial iteration.
+type TryHint struct {
+	// Level is error, warning or info.
+	Level string `json:"level"`
+	// Step names the step the hint is about ("" = whole scenario).
+	Step    string  `json:"step,omitempty"`
+	Message string  `json:"message"`
+	Fix     *TryFix `json:"fix,omitempty"`
+}
+
+// TryFix is a suggested scenario edit that a client can apply.
+type TryFix struct {
+	// Kind is base_url (set target.base_url to Value) or step_path (set
+	// the path of steps[Step], or of auth.login when Step is -1).
+	Kind  string `json:"kind"`
+	Step  int    `json:"step"`
+	Value string `json:"value"`
+	// Label is a short button text, e.g. "Use https://www.example.com".
+	Label string `json:"label"`
 }
 
 // StartRunRequest is the body of POST /api/tests/{id}/runs.

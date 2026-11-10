@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
-import type { FileInfo, Test, ValidateResult } from '../api/types';
+import type { FileInfo, Test, TryFix, TryResult, ValidateResult } from '../api/types';
 import { ProfileChart } from '../components/charts';
 import { QuickFormView } from '../components/QuickFormView';
 import { RunStartDialog } from '../components/RunStartDialog';
 import { ScenarioFormView } from '../components/ScenarioFormView';
+import { TryPanel } from '../components/TryPanel';
 import { ErrorAlert, Icon, Loading } from '../components/ui';
 import { YamlEditor } from '../components/YamlEditor';
 import { fmtBytes, fmtSeconds } from '../lib/format';
 import { useDebounced } from '../lib/hooks';
 import { defaultQuick, formToQuick, quickToForm, type QuickForm } from '../lib/quick';
+import { applyFix } from '../lib/trial';
 import {
   defaultForm,
   formToYaml,
@@ -76,6 +78,12 @@ export function TestEditorPage() {
   /** Quick-mode state; null while in advanced mode or when the YAML stopped being representable. */
   const [quick, setQuick] = useState<QuickForm | null>(null);
   const [filesFlash, setFilesFlash] = useState(false);
+  // ----- test request -----
+  const [tryOpen, setTryOpen] = useState(false);
+  const [tryBusy, setTryBusy] = useState(false);
+  const [tryRes, setTryRes] = useState<TryResult | null>(null);
+  const [tryErr, setTryErr] = useState<unknown>(null);
+  const [tryYaml, setTryYaml] = useState<string | null>(null);
 
   // ----- load -----
   useEffect(() => {
@@ -193,7 +201,7 @@ export function TestEditorPage() {
     let alive = true;
     setValidating(true);
     api
-      .validate(debouncedYaml)
+      .validate(debouncedYaml, isNew ? undefined : id)
       .then((r) => {
         if (!alive) return;
         setValidation(r);
@@ -204,7 +212,7 @@ export function TestEditorPage() {
     return () => {
       alive = false;
     };
-  }, [debouncedYaml]);
+  }, [debouncedYaml, id, isNew]);
 
   // ----- warn on unload with unsaved changes -----
   const dirty = savedYaml === null ? true : yaml !== savedYaml;
@@ -256,6 +264,40 @@ export function TestEditorPage() {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
+  const sendTry = async () => {
+    setTryOpen(true);
+    setTryBusy(true);
+    setTryErr(null);
+    const sent = yaml;
+    try {
+      const r = await api.tryRequest(sent, isNew ? undefined : id);
+      setTryRes(r);
+      setTryYaml(sent);
+    } catch (e) {
+      setTryErr(e);
+      setTryRes(null);
+    } finally {
+      setTryBusy(false);
+    }
+  };
+
+  /** Applies a hint's fix to the form (and Quick state); false if it no longer applies. */
+  const applyTryFix = (fix: TryFix): boolean => {
+    const cur = formRef.current;
+    if (!cur || parseErr) return false;
+    const next = applyFix(cur, fix);
+    if (!next) return false;
+    setForm(next);
+    setYaml(formToYaml(next));
+    setParseErr(null);
+    if (mode === 'quick') {
+      const q = formToQuick(next).quick;
+      if (q) setQuick(q);
+    }
+    setToast(`Applied: ${fix.label}`);
+    return true;
+  };
+
   const profile = useMemo(() => (form ? stagesToProfile(form.load.stages) : null), [form]);
   const lines = useMemo(
     () => errorLines([...(validation?.errors ?? []), ...(parseErr ? [parseErr] : [])]),
@@ -296,6 +338,18 @@ export function TestEditorPage() {
             History
           </Link>
         )}
+        <button
+          className="btn"
+          onClick={sendTry}
+          disabled={tryBusy || !!parseErr || validation?.valid === false}
+          title={
+            parseErr || validation?.valid === false
+              ? 'Fix the validation problems first'
+              : 'Send one iteration of the current (unsaved) scenario and explain failures'
+          }
+        >
+          {tryBusy ? <span className="spinner" /> : <Icon name="external" size={12} />} Test request
+        </button>
         <button
           className="btn"
           disabled={isNew || dirty}
@@ -385,6 +439,7 @@ export function TestEditorPage() {
               ) : !validation ? (
                 <span className="muted">Validating…</span>
               ) : validation.valid ? (
+                <>
                 <div className="validation-summary">
                   <span className="good">
                     <Icon name="check" size={14} />
@@ -398,6 +453,24 @@ export function TestEditorPage() {
                     </span>
                   </span>
                 </div>
+                {(validation.warnings ?? []).length > 0 && (
+                  <>
+                    <div className="validation-summary">
+                      <span className="warn">
+                        <Icon name="alert" size={14} />
+                      </span>
+                      <strong>
+                        {validation.warnings!.length} warning{validation.warnings!.length === 1 ? '' : 's'}
+                      </strong>
+                    </div>
+                    <ul className="err-list warn-list">
+                      {validation.warnings!.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                </>
               ) : (
                 <>
                   <div className="validation-summary">
@@ -446,6 +519,17 @@ export function TestEditorPage() {
         </aside>
       </div>
 
+      {tryOpen && (
+        <TryPanel
+          result={tryRes}
+          loading={tryBusy}
+          error={tryErr}
+          stale={tryRes !== null && tryYaml !== yaml}
+          onClose={() => setTryOpen(false)}
+          onRerun={sendTry}
+          onApply={applyTryFix}
+        />
+      )}
       {runOpen && test && <RunStartDialog test={{ ...test, yaml }} onClose={() => setRunOpen(false)} />}
       {toast && <div className="toast">{toast}</div>}
     </>

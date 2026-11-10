@@ -146,6 +146,20 @@ auth:
 - A failed login fails the iteration and is retried next time; a `401` from any step drops the cached login.
 - `bearer` (`token: "{{api_key}}"`) and `basic` (`username`, `password`) need no login; `{{var}}`s come from CSV data.
 
+### Test request (`goloadtest try`)
+
+Before starting a run, send ONE iteration and see exactly what the target answers:
+
+- **UI:** the **Test request** button next to Run / Save in both editors sends the current, possibly unsaved scenario. A drawer shows each step (status, time, rendered URL, headers with secrets masked, a body snippet, extracted variables, every assertion) and hints at the top. Hints that carry a fix (e.g. a new `base_url`) have an **Apply** button that edits the form.
+- **CLI:** `goloadtest try [-v] [-json] scenario.yaml` prints the same report; exit 0 when every step passed, 1 otherwise.
+- **API:** `POST /api/tests/try` `{yaml, test_id?}` (see `internal/api/doc.go`).
+
+It runs the login (if any) and each step once, in order, through the same executors as a run, and stops at the first failing step like a run does. `{{vars}}` come from the first CSV row (saved tests with an uploaded file; the CLI reads the file next to the scenario). The server's target allowlist applies. Limits: 30 s in total, the scenario timeout per step, the first 20 steps, think times and WebSocket hold skipped, body snippets up to 8 KiB of text, at most 4 test requests at once per server.
+
+Hints explain the usual reasons a run fails with 100% errors: a **redirect** (GoLoad never follows redirects; e.g. `https://example.com/` → `https://www.example.com:443/` suggests `base_url: https://www.example.com`), a **WAF / bot protection** block (Cloudflare, Akamai, …), **rate limiting** (429), `{{var}}`s that were **sent literally** because nothing defines them, extracts that did not match, failed assertions, and **TLS / DNS / connection** errors in plain words. `goloadtest validate` and the editor's Validation panel also warn about `{{var}}` references that no CSV column, earlier extract or auth variable defines.
+
+In runs, a failing `3xx` now names its target, e.g. `assert status: got 301, want eq 200 (redirects to https://www.example.com:443/)`.
+
 ## How it measures
 
 - **Open model (default).** The target is iterations per second. Arrival times come from the integral of the ramp, so there is no drift. When `max_vus` iterations are already in flight, a new arrival is dropped and counted, never queued.

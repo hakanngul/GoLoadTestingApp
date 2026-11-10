@@ -87,6 +87,13 @@ type Options struct {
 	// completely and counted, but only the first MaxMessageBytes are
 	// searched. 0 means DefaultMaxMessageBytes.
 	MaxMessageBytes int
+
+	// CheckURL, if set, vets every rendered connection URL before the
+	// handshake; an error fails the step without connecting (trial runs).
+	CheckURL func(rawURL string) error
+	// Trace, if set, is called with the rendered URL and handshake headers
+	// of every ws step just before it connects (trial runs only).
+	Trace func(step, rawURL string, header http.Header)
 }
 
 // Executor runs ws steps. It is safe for concurrent use by many
@@ -97,6 +104,9 @@ type Executor struct {
 	timeout time.Duration
 	maxMsg  int
 	steps   []step
+
+	checkURL func(string) error
+	trace    func(string, string, http.Header)
 }
 
 var _ protocol.Executor = (*Executor)(nil)
@@ -164,6 +174,9 @@ func New(sc *scenario.Scenario, opts Options) (*Executor, error) {
 		timeout: sc.Target.Timeout.Duration,
 		maxMsg:  opts.MaxMessageBytes,
 		steps:   make([]step, len(sc.Steps)),
+
+		checkURL: opts.CheckURL,
+		trace:    opts.Trace,
 	}
 	if e.timeout <= 0 {
 		e.timeout = DefaultTimeout
@@ -453,6 +466,17 @@ func (e *Executor) connect(ctx context.Context, st *step, vars map[string]string
 		opts.Host = st.host
 		if st.hostTmpl {
 			opts.Host = scenario.Render(st.host, vars)
+		}
+	}
+
+	if e.trace != nil {
+		e.trace(st.name, target, opts.HTTPHeader.Clone())
+	}
+	if e.checkURL != nil {
+		if err := e.checkURL(target); err != nil {
+			res.Err = fmt.Errorf("connect: %w", err)
+			res.Latency = time.Since(start)
+			return nil, res
 		}
 	}
 

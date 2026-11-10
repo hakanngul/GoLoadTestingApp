@@ -50,6 +50,10 @@ const (
 
 	defaultHeartbeat = 15 * time.Second
 
+	// maxConcurrentTries caps POST /api/tests/try requests in progress
+	// server-wide; more answer 429.
+	maxConcurrentTries = 4
+
 	devOrigin = "http://localhost:5173"
 )
 
@@ -68,6 +72,8 @@ type server struct {
 
 	// heartbeat is the SSE keep-alive interval (overridable in tests).
 	heartbeat time.Duration
+	// trySem holds one token per test request in progress.
+	trySem chan struct{}
 
 	api *http.ServeMux
 }
@@ -96,6 +102,7 @@ func newServer(cfg Config) *server {
 		retention: cfg.Retention,
 		reporter:  report.New(cfg.Store),
 		heartbeat: defaultHeartbeat,
+		trySem:    make(chan struct{}, maxConcurrentTries),
 		api:       http.NewServeMux(),
 	}
 	s.routes()
@@ -115,6 +122,7 @@ func (s *server) routes() {
 	m.HandleFunc("PUT /api/tests/{id}/files/{name}", s.handlePutFile)
 	m.HandleFunc("DELETE /api/tests/{id}/files/{name}", s.handleDeleteFile)
 	m.HandleFunc("POST /api/validate", s.handleValidate)
+	m.HandleFunc("POST /api/tests/try", s.handleTry)
 
 	m.HandleFunc("POST /api/tests/{id}/runs", s.handleStartRun)
 	m.HandleFunc("GET /api/runs", s.handleListRuns)

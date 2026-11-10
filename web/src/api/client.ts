@@ -13,6 +13,7 @@ import type {
   Test,
   TrendPoint,
   UpdateRunRequest,
+  TryResult,
   ValidateResult,
   Worker,
 } from './types';
@@ -151,7 +152,11 @@ export const api = {
     request<void>('PUT', `/api/tests/${enc(id)}/files/${enc(name)}`, undefined, content),
   deleteFile: (id: string, name: string) =>
     request<void>('DELETE', `/api/tests/${enc(id)}/files/${enc(name)}`),
-  validate: (yaml: string) => request<ValidateResult>('POST', '/api/validate', { yaml }),
+  validate: (yaml: string, testId?: string) =>
+    request<ValidateResult>('POST', '/api/validate', testId ? { yaml, test_id: testId } : { yaml }),
+  /** "Test request": one iteration of the (possibly unsaved) scenario. */
+  tryRequest: (yaml: string, testId?: string) =>
+    request<TryResult>('POST', '/api/tests/try', testId ? { yaml, test_id: testId } : { yaml }),
 
   startRun: (testId: string, req: StartRunRequest) =>
     request<Run>('POST', `/api/tests/${enc(testId)}/runs`, req),

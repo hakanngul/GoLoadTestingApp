@@ -899,7 +899,137 @@ function validate(yaml) {
     if (!okMetrics.includes(m[1])) errors.push(`thresholds[${i}].metric: unknown metric "${m[1]}"`);
   });
   if (errors.length) return { valid: false, errors };
-  return { valid: true, errors: [], model: meta.model, duration_s: meta.total, steps: meta.steps.length };
+  return { valid: true, errors: [], model: meta.model, duration_s: meta.total, steps: meta.steps.length, warnings: [] };
+}
+
+// ---------------------------------------------------------------- test request
+// POST /api/tests/try: a canned trial. Hosts without "www." (other than
+// localhost / IPs / *.test) answer like a real apex domain that redirects:
+// 301 -> https://www.<host>:443<path>, with a base_url fix. Otherwise every
+// step passes with plausible responses.
+function tryScenario(yaml) {
+  const clean = yaml
+    .split('\n')
+    .map((l) => l.replace(/\s+#.*$/, '').replace(/^#.*$/, ''))
+    .join('\n');
+  const unq = (v) => (v ?? '').trim().replace(/^["']|["']$/g, '');
+  const base = unq((clean.match(/base_url:\s*(\S+)/) || [])[1]).replace(/\/+$/, '');
+  let url;
+  try {
+    url = new URL(base);
+  } catch {
+    return null;
+  }
+  const stepsBlock = clean.split(/^steps:\s*$/m)[1]?.split(/^thresholds:\s*$/m)[0] ?? '';
+  const chunks = stepsBlock.split(/^ {2}- /m).slice(1);
+  const steps = chunks.map((c, i) => {
+    const f = (k) => unq((new RegExp(`(?:^|\\n)\\s*${k}:\\s*(.+)`).exec(c) || [])[1]);
+    const method = (f('method') || 'GET').toUpperCase();
+    const path = f('path') || '/';
+    return {
+      name: f('name') || `${method} ${path}`,
+      index: i,
+      method,
+      path,
+      extract: [...c.matchAll(/var:\s*([\w-]+)[\s\S]*?from:\s*(\w+)[\s\S]*?expr:\s*(.+)/g)].map((x) => ({
+        var: x[1],
+        source: x[2],
+        expr: unq(x[3].replace(/[}\]]+\s*$/, '')),
+      })),
+      asserts: [...c.matchAll(/type:\s*(status|json|duration|body_contains)[\s\S]*?value:\s*(.+)/g)].map(
+        (x) => `${x[1]} ${x[1] === 'body_contains' ? 'contains' : x[1] === 'duration' ? 'lt' : 'eq'} ${unq(x[2].replace(/[}\]]+\s*$/, ''))}`,
+      ),
+    };
+  });
+  const login = /^auth:[\s\S]*?type:\s*login/m.test(clean);
+  const host = url.hostname;
+  const redirects = !host.startsWith('www.') && !/^(localhost|[\d.]+|.*\.test|.*\.local)$/.test(host);
+  const reqHeaders = (extra = []) => [{ name: 'User-Agent', value: 'Go-http-client/2.0' }, ...extra];
+  const out = [];
+  let failed = false;
+  const all = login
+    ? [{ name: 'auth:login', index: -1, method: 'POST', path: '/login', extract: [{ var: 'token', source: 'json', expr: 'token' }], asserts: [] }, ...steps]
+    : steps;
+  all.forEach((s, i) => {
+    const step = {
+      name: s.name,
+      kind: s.index === -1 ? 'login' : 'http',
+      index: s.index,
+      state: 'not_run',
+      method: s.method,
+      url: base + s.path,
+      request_headers: [],
+      status: 0,
+      duration_ms: 0,
+      bytes: 0,
+      response_headers: [],
+      extracted: [],
+      assertions: [],
+    };
+    out.push(step);
+    if (failed) return;
+    const dur = 40 + ((i * 37) % 90) + Math.random() * 20;
+    step.duration_ms = Math.round(dur * 10) / 10;
+    step.request_headers = reqHeaders(login && s.index >= 0 ? [{ name: 'Authorization', value: 'Bearer eyJh… (164 chars)' }] : []);
+    if (s.method !== 'GET') step.request_headers.push({ name: 'Content-Type', value: 'application/json' });
+    if (redirects && i === 0) {
+      const loc = `https://www.${host}:443${s.path}`;
+      Object.assign(step, {
+        state: 'failed',
+        status: 301,
+        bytes: 162,
+        location: loc,
+        response_headers: [
+          { name: 'Content-Type', value: 'text/html' },
+          { name: 'Location', value: loc },
+          { name: 'Server', value: 'nginx' },
+        ],
+        body: '<html>\r\n<head><title>301 Moved Permanently</title></head>\r\n<body>\r\n<center><h1>301 Moved Permanently</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n',
+        assertions: (s.asserts.length ? s.asserts : ['status lt 400 (default without a status assertion)']).map((a) => ({
+          assertion: a,
+          passed: !a.startsWith('status eq') && !a.startsWith('body_contains'),
+          message: a.startsWith('status eq') ? `assert status: got 301, want ${a.slice(7)}` : undefined,
+        })),
+        error: `assert status: got 301, want eq 200 (redirects to ${loc})`,
+      });
+      failed = true;
+      return;
+    }
+    const body =
+      s.index === -1
+        ? '{"token":"eyJh… (164 chars)","expires_in":3600}'
+        : JSON.stringify({ ok: true, items: [{ id: 42, name: 'Trail shoe', price: 89.9 }], page: 1 });
+    Object.assign(step, {
+      state: 'passed',
+      status: 200,
+      bytes: body.length,
+      response_headers: [
+        { name: 'Content-Type', value: 'application/json' },
+        { name: 'Content-Length', value: String(body.length) },
+        { name: 'Server', value: 'nginx' },
+      ],
+      body,
+      assertions: (s.asserts.length ? s.asserts : ['status lt 400 (default without a status assertion)']).map((a) => ({ assertion: a, passed: true })),
+      extracted: s.extract.map((x) => ({ ...x, ok: true, value: x.var.includes('token') ? 'eyJh… (164 chars)' : '42' })),
+    });
+  });
+  const hints = [];
+  if (redirects) {
+    const nb = `https://www.${host}${url.pathname.replace(/\/+$/, '')}`;
+    hints.push({
+      level: 'error',
+      step: all[0]?.name,
+      message: `The response is a 301 redirect to https://www.${host}:443${all[0]?.path ?? '/'}. GoLoad does not follow redirects, so every request of a run would measure this 301 instead of the real page. The site moved to another host or scheme: set target.base_url to ${nb}.`,
+      fix: { kind: 'base_url', step: -1, value: nb, label: `Set base_url to ${nb}` },
+    });
+  }
+  return {
+    ok: !failed,
+    duration_ms: Math.round(out.reduce((a, s) => a + s.duration_ms, 0) * 10) / 10 + 3,
+    data: {},
+    steps: out,
+    hints,
+  };
 }
 
 // ---------------------------------------------------------------- reporting
@@ -1115,6 +1245,17 @@ const server = createServer(async (req, res) => {
     if (a === 'validate' && m === 'POST') {
       const body = await readJSON(req);
       return send(res, 200, validate(String(body?.yaml ?? '')));
+    }
+
+    if (a === 'tests' && b === 'try' && m === 'POST') {
+      const body = await readJSON(req);
+      const yaml = String(body?.yaml ?? '');
+      const v = validate(yaml);
+      if (!v.valid) return apiErr(res, 400, 'invalid scenario', v.errors);
+      const r = tryScenario(yaml);
+      if (!r) return apiErr(res, 400, 'invalid scenario', ['target.base_url: invalid URL']);
+      await new Promise((ok) => setTimeout(ok, 350));
+      return send(res, 200, r);
     }
 
     if (a === 'tests') {
