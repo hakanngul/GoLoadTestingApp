@@ -374,7 +374,11 @@ func (r *sqliteTestRow) test() (model.Test, error) {
 
 // sqliteListTestsSQL selects every test with its newest run (ListTests).
 const sqliteListTestsSQL = `
-		SELECT ` + sqliteTestCols + `, ` + sqliteRunColsLR + `
+		SELECT t.id, t.name, t.yaml, t.created_at, t.updated_at, COALESCE(t.baseline_run_id, ''),
+	(SELECT json_group_array(json_object('name', f.name, 'size', f.size) ORDER BY f.name)
+	 FROM test_files f WHERE f.test_id = t.id), lr.id, lr.test_id, lr.test_name, lr.status, lr.yaml, lr.workers,
+	lr.started_at, lr.finished_at, lr.summary, lr.thresholds, lr.peak_cpu, lr.warnings, lr.error,
+	lr.label, lr.notes
 		FROM tests t
 		LEFT JOIN runs lr ON lr.id = (
 			SELECT r.id FROM runs r WHERE r.test_id = t.id
@@ -581,7 +585,9 @@ const sqliteCreateRunSQL = `
 		SELECT ?, t.id, COALESCE(NULLIF(?, ''), t.name), COALESCE(NULLIF(?, ''), 'queued'),
 		       ?, ?, COALESCE(?, ?), ?, ?, ?, ?, ?, ?, ?, ?
 		FROM tests t WHERE t.id = ?
-		RETURNING ` + sqliteRunColsBare
+		RETURNING id, test_id, test_name, status, yaml, workers,
+	started_at, finished_at, summary, thresholds, peak_cpu, warnings, error,
+	label, notes`
 
 // CreateRun stores a new run for an existing test. The store assigns the
 // ID; StartedAt defaults to now, Status to queued and TestName to the
@@ -624,14 +630,26 @@ func (s *SQLite) UpdateRun(ctx context.Context, r model.Run) error {
 
 // Run queries (GetRun, ListRuns, UpdateRunMeta, RunsSince).
 const (
-	sqliteGetRunSQL   = `SELECT ` + sqliteRunColsR + ` FROM runs r WHERE r.id = ?`
-	sqliteListRunsSQL = `SELECT ` + sqliteRunColsR + ` FROM runs r
+	sqliteGetRunSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
+	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
+	r.label, r.notes FROM runs r WHERE r.id = ?`
+	sqliteListRunsSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
+	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
+	r.label, r.notes FROM runs r
 			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`
-	sqliteListTestRunsSQL = `SELECT ` + sqliteRunColsR + ` FROM runs r WHERE r.test_id = ?
+	sqliteListTestRunsSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
+	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
+	r.label, r.notes FROM runs r WHERE r.test_id = ?
 			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`
 	sqliteUpdateRunMetaSQL = `UPDATE runs SET label = COALESCE(?, label), notes = COALESCE(?, notes)
-		WHERE id = ? RETURNING ` + sqliteRunColsBare
-	sqliteRunsSinceSQL = `SELECT ` + sqliteRunColsSlimR + ` FROM runs r WHERE r.started_at >= ?
+		WHERE id = ? RETURNING id, test_id, test_name, status, yaml, workers,
+	started_at, finished_at, summary, thresholds, peak_cpu, warnings, error,
+	label, notes`
+	sqliteRunsSinceSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
+	r.started_at, r.finished_at,
+	CASE WHEN json_type(r.summary) = 'object' THEN json_remove(r.summary, '$.by_step') ELSE r.summary END,
+	r.thresholds, r.peak_cpu, r.warnings, r.error,
+	r.label, r.notes FROM runs r WHERE r.started_at >= ?
 		ORDER BY r.started_at DESC, r.id DESC`
 )
 

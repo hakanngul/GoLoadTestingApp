@@ -50,11 +50,21 @@ const sqlitePrunable = `r.status NOT IN ('queued', 'running')
 // sqlitePruneCandidatesSQL lists the prunable runs, oldest first; its
 // single parameter is the cutoff in microseconds.
 const sqlitePruneCandidatesSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.started_at, r.finished_at
-		FROM runs r WHERE ` + sqlitePrunable + ` ORDER BY r.started_at, r.id`
+		FROM runs r WHERE r.status NOT IN ('queued', 'running')
+	AND COALESCE(r.finished_at, r.started_at) < ?
+	AND NOT EXISTS (SELECT 1 FROM tests t WHERE t.baseline_run_id = r.id)
+	AND r.id <> (SELECT l.id FROM runs l
+		WHERE l.test_id = r.test_id AND l.status NOT IN ('queued', 'running')
+		ORDER BY l.started_at DESC, l.id DESC LIMIT 1) ORDER BY r.started_at, r.id`
 
 // sqlitePruneDeleteSQL deletes one run if it is still prunable; its
 // parameters are the run ID and the cutoff in microseconds.
-const sqlitePruneDeleteSQL = `DELETE FROM runs AS r WHERE r.id = ? AND ` + sqlitePrunable + ` RETURNING id`
+const sqlitePruneDeleteSQL = `DELETE FROM runs AS r WHERE r.id = ? AND r.status NOT IN ('queued', 'running')
+	AND COALESCE(r.finished_at, r.started_at) < ?
+	AND NOT EXISTS (SELECT 1 FROM tests t WHERE t.baseline_run_id = r.id)
+	AND r.id <> (SELECT l.id FROM runs l
+		WHERE l.test_id = r.test_id AND l.status NOT IN ('queued', 'running')
+		ORDER BY l.started_at DESC, l.id DESC LIMIT 1) RETURNING id`
 
 var _ Pruner = (*SQLite)(nil)
 
