@@ -1,29 +1,17 @@
-# Master + PostgreSQL on a single host (local dev or the AWS master instance).
+# Master on a single host (local dev or the AWS master instance). Data is
+# kept in a SQLite file in the goload-data volume (/data/goload.db); no
+# database server is needed. For PostgreSQL instead, add the override:
 #
 #   cp deploy/env.example .env   # then fill in the secrets
 #   docker compose up -d --build
+#   # with PostgreSQL:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
 #
 # UI/API: http://localhost:8080   gRPC (workers): localhost:9090
+# Backups: see "Data and backups" in README.md.
 name: goload
 
 services:
-  postgres:
-    image: postgres:16
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: goload
-      POSTGRES_DB: goload
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U goload -d goload"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
-    # Not published: only the master talks to the database.
-
   master:
     image: ${GOLOAD_IMAGE:-goloadtest:local}
     build:
@@ -32,12 +20,11 @@ services:
         VERSION: ${GOLOAD_VERSION:-dev}
     restart: unless-stopped
     command: ["serve"]
-    depends_on:
-      postgres:
-        condition: service_healthy
+    # Lets graceful shutdown finish active runs and checkpoint the database.
+    stop_grace_period: 40s
     environment:
       GOLOAD_ADDR: ":8080"
-      GOLOAD_DB: postgres://goload:${POSTGRES_PASSWORD}@postgres:5432/goload?sslmode=disable
+      GOLOAD_DB: sqlite:/data/goload.db
       # Bearer token for the REST API / UI. Empty disables auth: never do
       # that on a reachable host.
       GOLOAD_TOKEN: ${GOLOAD_TOKEN:?set GOLOAD_TOKEN in .env}
@@ -57,6 +44,8 @@ services:
       GOLOAD_AWS_INSTANCE_TYPES: ${GOLOAD_AWS_INSTANCE_TYPES:-c7i.large,c6i.large,c5.large}
       GOLOAD_AWS_SPOT_ONLY: ${GOLOAD_AWS_SPOT_ONLY:-false}
       GOLOAD_AWS_MAX_PRICE: ${GOLOAD_AWS_MAX_PRICE:-}
+    volumes:
+      - goload-data:/data
     ports:
       - "${GOLOAD_HTTP_PORT:-8080}:8080"
       - "${GOLOAD_GRPC_PORT:-9090}:9090"
@@ -66,4 +55,4 @@ services:
         hard: 65536
 
 volumes:
-  pgdata:
+  goload-data:

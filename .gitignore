@@ -15,3 +15,6 @@ coverage.*
 
 # Env
 .env
+
+# Local SQLite store (make serve), with its -wal / -shm files
+goload.db*

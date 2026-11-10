@@ -1,7 +1,8 @@
 #!/bin/bash
 # goload master bootstrap (Amazon Linux 2023). Rendered by Terraform.
-# Installs Docker + Compose, fetches secrets from SSM and starts master +
-# PostgreSQL. Logs: /var/log/cloud-init-output.log (secrets are never echoed).
+# Installs Docker + Compose, fetches secrets from SSM and starts the master
+# (SQLite database in the goload-data volume on the root EBS volume).
+# Logs: /var/log/cloud-init-output.log (secrets are never echoed).
 set -euo pipefail
 
 REGION="${region}"
@@ -31,7 +32,6 @@ param() {
 install -d -m 0700 "$APP_DIR"
 umask 077
 {
-  echo "POSTGRES_PASSWORD=$(param '${db_password_param}')"
   echo "GOLOAD_TOKEN=$(param '${api_token_param}')"
   echo "GOLOAD_WORKER_TOKEN=$(param '${worker_token_param}')"
   echo "GOLOAD_ALLOWED_TARGETS=${allowed_targets}"
@@ -52,32 +52,17 @@ chmod 0600 "$APP_DIR/.env"
 cat > "$APP_DIR/docker-compose.yml" <<'COMPOSE'
 name: goload
 services:
-  postgres:
-    image: postgres:16
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: goload
-      POSTGRES_DB: goload
-      POSTGRES_PASSWORD: $${POSTGRES_PASSWORD}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U goload -d goload"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
   master:
     image: $${GOLOAD_IMAGE}
     restart: unless-stopped
     command: ["serve"]
-    depends_on:
-      postgres:
-        condition: service_healthy
+    stop_grace_period: 40s
     env_file: .env
     environment:
       GOLOAD_ADDR: ":${http_port}"
-      GOLOAD_DB: postgres://goload:$${POSTGRES_PASSWORD}@postgres:5432/goload?sslmode=disable
+      GOLOAD_DB: sqlite:/data/goload.db
+    volumes:
+      - goload-data:/data
     ports:
       - "${http_port}:${http_port}"
       - "${grpc_port}:${grpc_port}"
@@ -86,7 +71,7 @@ services:
         soft: 65536
         hard: 65536
 volumes:
-  pgdata:
+  goload-data:
 COMPOSE
 
 cd "$APP_DIR"

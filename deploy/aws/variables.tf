@@ -68,13 +68,13 @@ variable "worker_egress_cidrs" {
 # ---------------------------------------------------------------------------
 
 variable "master_instance_type" {
-  description = "Instance type of the always-on master (UI, API, coordinator, PostgreSQL)."
+  description = "Instance type of the always-on master (UI, API, coordinator, SQLite database)."
   type        = string
   default     = "t3.small"
 }
 
 variable "master_volume_gb" {
-  description = "Root volume size of the master in GiB (holds Docker images and PostgreSQL data)."
+  description = "Root volume size of the master in GiB (holds Docker images and the SQLite database)."
   type        = number
   default     = 30
 }
@@ -86,7 +86,7 @@ variable "master_public_ip" {
 }
 
 variable "master_termination_protection" {
-  description = "Protect the master (and its PostgreSQL data) against accidental termination."
+  description = "Protect the master (and its SQLite database) against accidental termination."
   type        = bool
   default     = true
 }

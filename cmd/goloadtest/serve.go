@@ -10,8 +10,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -33,7 +35,8 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	addr := flags.String("addr", envOr("GOLOAD_ADDR", ":8080"), "HTTP listen address")
-	db := flags.String("db", envOr("GOLOAD_DB", "memory"), `Postgres DSN, or "memory" for a throwaway in-memory store`)
+	db := flags.String("db", envOr("GOLOAD_DB", defaultDB),
+		`store: "sqlite:<path>" (or a path ending in .db), "postgres://..." / "postgresql://..." DSN, or "memory" for a throwaway in-memory store`)
 	token := flags.String("token", os.Getenv("GOLOAD_TOKEN"), "require this bearer token on /api (empty = no auth)")
 	devCORS := flags.Bool("dev-cors", false, "allow the Vite dev server (localhost:5173) to call the API")
 	allowTargets := flags.String("allow-targets", os.Getenv("GOLOAD_ALLOWED_TARGETS"),
@@ -48,12 +51,18 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	st, err := openStore(ctx, *db)
+	spec, err := parseStoreSpec(*db)
+	if err != nil {
+		fmt.Fprintf(stderr, "serve: -db: %v\n", err)
+		return exitUsage
+	}
+	st, err := openStore(ctx, spec)
 	if err != nil {
 		fmt.Fprintf(stderr, "store: %v\n", err)
 		return exitUsage
 	}
 	defer st.Close()
+	log.Info("store opened", "kind", spec.kind, "location", spec.describe())
 	if n, err := st.MarkInterrupted(ctx, "master restarted while the run was active"); err != nil {
 		log.Warn("mark interrupted runs", "error", err)
 	} else if n > 0 {
@@ -132,7 +141,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	fmt.Fprintf(stdout, "goload %s listening on %s (store: %s)\n", version, *addr, storeKind(*db))
+	fmt.Fprintf(stdout, "goload %s listening on %s (store: %s)\n", version, *addr, spec.String())
 
 	select {
 	case err := <-errc:
@@ -158,18 +167,95 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-func openStore(ctx context.Context, dsn string) (store.Store, error) {
-	if dsn == "memory" {
-		return store.NewMemory(), nil
-	}
-	return store.NewPostgres(ctx, dsn)
+// defaultDB is the -db default: a SQLite file in the working directory,
+// so a plain `serve` keeps its data without any database server.
+const defaultDB = "sqlite:./goload.db"
+
+// storeSpec is a parsed -db value.
+type storeSpec struct {
+	kind string // "memory", "sqlite" or "postgres"
+	loc  string // sqlite: file path; postgres: DSN
 }
 
-func storeKind(dsn string) string {
-	if dsn == "memory" {
-		return "memory (data is lost on exit)"
+// parseStoreSpec interprets -db: "memory", "sqlite:<path>", a bare path
+// ending in .db / .sqlite / .sqlite3, or a PostgreSQL DSN (postgres:// or
+// postgresql:// URL, or libpq "host=... dbname=..." form).
+func parseStoreSpec(v string) (storeSpec, error) {
+	v = strings.TrimSpace(v)
+	lower := strings.ToLower(v)
+	switch {
+	case v == "":
+		return storeSpec{}, errors.New(`empty; use "sqlite:<path>", "postgres://..." or "memory"`)
+	case lower == "memory":
+		return storeSpec{kind: "memory"}, nil
+	case strings.HasPrefix(lower, "sqlite://"):
+		return sqliteSpec(v[len("sqlite://"):])
+	case strings.HasPrefix(lower, "sqlite:"):
+		return sqliteSpec(v[len("sqlite:"):])
+	case strings.HasPrefix(lower, "postgres://"), strings.HasPrefix(lower, "postgresql://"):
+		return storeSpec{kind: "postgres", loc: v}, nil
+	case strings.Contains(v, "=") && (strings.Contains(lower, "host=") || strings.Contains(lower, "dbname=")):
+		// libpq keyword/value DSN ("host=db dbname=goload ...").
+		return storeSpec{kind: "postgres", loc: v}, nil
+	case strings.HasSuffix(lower, ".db"), strings.HasSuffix(lower, ".sqlite"), strings.HasSuffix(lower, ".sqlite3"):
+		return sqliteSpec(v)
+	default:
+		return storeSpec{}, fmt.Errorf(`unrecognised store %q; use "sqlite:<path>", a path ending in .db, "postgres://..." or "memory"`, v)
 	}
-	return "postgres"
+}
+
+func sqliteSpec(path string) (storeSpec, error) {
+	if path == "" {
+		return storeSpec{}, errors.New(`"sqlite:" needs a file path, e.g. sqlite:./goload.db`)
+	}
+	return storeSpec{kind: "sqlite", loc: path}, nil
+}
+
+// describe is a log-safe location: the SQLite path, or the Postgres host
+// and database without credentials.
+func (s storeSpec) describe() string {
+	switch s.kind {
+	case "sqlite":
+		if abs, err := filepath.Abs(s.loc); err == nil && s.loc != ":memory:" {
+			return abs
+		}
+		return s.loc
+	case "postgres":
+		if u, err := url.Parse(s.loc); err == nil && u.Host != "" {
+			return u.Host + u.Path
+		}
+		return "(keyword/value DSN)"
+	default:
+		return "in-memory"
+	}
+}
+
+// String is the store description printed on startup.
+func (s storeSpec) String() string {
+	switch s.kind {
+	case "memory":
+		return "memory (data is lost on exit)"
+	case "sqlite":
+		return "sqlite " + s.describe()
+	default:
+		return "postgres " + s.describe()
+	}
+}
+
+func openStore(ctx context.Context, spec storeSpec) (store.Store, error) {
+	switch spec.kind {
+	case "memory":
+		return store.NewMemory(), nil
+	case "sqlite":
+		if dir := filepath.Dir(spec.loc); spec.loc != ":memory:" {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return nil, fmt.Errorf("sqlite: create directory %s: %w", dir, err)
+			}
+		}
+		return store.NewSQLite(ctx, spec.loc)
+	default:
+		return store.NewPostgres(ctx, spec.loc)
+	}
 }
 
 func envOr(key, def string) string {

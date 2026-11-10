@@ -39,7 +39,7 @@ The gRPC link is plaintext by default (`-insecure=true`). It is meant for a priv
 
 ## Data
 
-- **Scenarios and CSV files** are stored in Postgres. CSV files can contain test credentials. Use dedicated test accounts, never real users.
+- **Scenarios and CSV files** are stored in the master's database: by default the SQLite file `goload.db` (`/data/goload.db` in Docker), or PostgreSQL when `GOLOAD_DB` points to one. CSV files can contain test credentials, so treat the database file and its backups as secrets: keep it on an encrypted volume (the AWS master's root volume is encrypted), readable only by the service user, and out of version control (`goload.db*` is in `.gitignore`). Use dedicated test accounts, never real users.
 - **Error samples:** at most 100 per run, each message capped at 1 KB. They may contain fragments of response bodies.
 - **Restarts:** runs that were active when the master restarted are marked `error`. They are not resumed.
 

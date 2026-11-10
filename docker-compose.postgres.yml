@@ -1,0 +1,35 @@
+# Optional override: keep the master's data in PostgreSQL instead of the
+# default SQLite file. Needs POSTGRES_PASSWORD in .env.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+#
+# The goload-data volume is still mounted but unused. Switching stores does
+# not migrate existing data.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: goload
+      POSTGRES_DB: goload
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goload -d goload"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    # Not published: only the master talks to the database.
+
+  master:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GOLOAD_DB: postgres://goload:${POSTGRES_PASSWORD}@postgres:5432/goload?sslmode=disable
+
+volumes:
+  pgdata:

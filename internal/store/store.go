@@ -1,7 +1,8 @@
 // Package store persists tests, runs and metrics.
 //
-// CONTRACT FILE (interface). Implementations: postgres.go (pgx) and
-// memory.go (tests and `serve -db memory`).
+// CONTRACT FILE (interface). Implementations: sqlite.go (default,
+// modernc.org/sqlite, no CGO), postgres.go (pgx) and memory.go (tests and
+// `serve -db memory`).
 package store
 
 import (

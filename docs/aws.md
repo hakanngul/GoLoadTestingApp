@@ -18,7 +18,7 @@ short-lived spot workers that exist only while a run is executing.
    │  docker compose                               │  │  egress (IGW, public IPs)
    │   ├─ goloadtest serve  :8080 REST + UI        │  │
    │   │                    :9090 gRPC coordinator │◄─┼── workers dial in (worker SG only)
-   │   └─ postgres:16       (local volume)         │  │
+   │   └─ SQLite /data/goload.db (volume on EBS)   │  │
    │  instance role: Run/Terminate goload workers  │  │
    └──────────────┬────────────────────────────────┘  │
                   │ RunInstances (launch template, spot, user data)
@@ -41,15 +41,20 @@ Why this shape:
   `spot_only = true`.
 - **One image, two roles.** The same container runs `serve` (master) and
   `worker`.
-- **PostgreSQL on the master** for the early phases, and Amazon RDS later. CSV
-  and report files will move to S3 later.
+- **SQLite on the master's EBS volume.** There is exactly one master and
+  workers never touch the database, so a single SQLite file
+  (`/data/goload.db` in the `goload-data` Docker volume on the encrypted gp3
+  root volume) is enough: no database server, no password, nothing extra to
+  pay for. PostgreSQL (e.g. Amazon RDS) remains an option through
+  `GOLOAD_DB=postgres://...` and `docker-compose.postgres.yml`. CSV and report
+  files will move to S3 later.
 
 ### Components in this repository
 
 | Path | What it is |
 |---|---|
 | `Dockerfile` | Multi-stage build: Node 22 + pnpm builds `web/`, Go 1.24 builds a static binary, runtime image is distroless `static:nonroot`. |
-| `docker-compose.yml` | Master + `postgres:16` for local use (the master instance writes an equivalent file without the build step). |
+| `docker-compose.yml` | Master with SQLite in the `goload-data` volume (the master instance writes an equivalent file without the build step). `docker-compose.postgres.yml` is an optional override that adds `postgres:16`. |
 | `deploy/env.example` | Template for the `.env` file that compose reads. |
 | `deploy/aws/` | Terraform: security groups, IAM, SSM secrets, master instance, worker launch template. |
 | `internal/provision/` | `Provisioner` interface, `Noop`, and the EC2 implementation `AWS`. |
@@ -154,7 +159,7 @@ important ones:
 | `vpc_id`, `master_subnet_id`, `worker_subnet_ids` | – | Existing network. No VPC is created. |
 | `admin_cidrs` | – | Who can reach `:8080`. `0.0.0.0/0` is rejected. |
 | `image`, `ecr_repository_arn` | – / null | Container image; when the ARN is set, both roles get ECR pull access. |
-| `master_instance_type` | `t3.small` | Master + PostgreSQL. |
+| `master_instance_type` | `t3.small` | Master (UI, API, coordinator, SQLite). |
 | `worker_instance_types` | `c7i.large, c6i.large, c5.large` | Fallback order. IAM only allows these types. |
 | `spot_only`, `spot_max_price` | `false`, `""` | An empty max price means the on-demand price is the cap. |
 | `worker_egress_cidrs` | `0.0.0.0/0` | Narrow this to add a network-level target allowlist. Workers still need registry, OS and SSM endpoints. |
@@ -163,7 +168,7 @@ important ones:
 What gets created: two security groups (the master accepts `8080` from
 `admin_cidrs` and `9090` from the worker SG only; workers accept **no
 inbound** traffic), master and worker IAM roles and instance profiles, SSM
-SecureString parameters for the API token, worker token and DB password, the
+SecureString parameters for the API token and worker token, the
 worker launch template (Amazon Linux 2023, IMDSv2, encrypted gp3), and the
 master instance with an Elastic IP.
 
@@ -217,6 +222,22 @@ Workers launched by the master get the user data generated in
 `internal/provision/userdata.go` instead (with `goload:run-id=<run>`). The two
 scripts must stay in sync.
 
+### 2.6 Database and backups
+
+The master keeps everything (tests, CSV files, runs, metrics, error groups) in
+`/data/goload.db` inside the `goload-data` Docker volume, i.e. under
+`/var/lib/docker/volumes/goload_goload-data/_data/` on the root EBS volume.
+Options, from simplest:
+
+- **EBS snapshots** of the master's root volume (e.g. a daily Amazon Data
+  Lifecycle Manager policy). SQLite in WAL mode recovers cleanly from a
+  crash-consistent snapshot.
+- **File copy while stopped:** `docker compose stop master`, copy `goload.db`
+  out of the volume, `docker compose start master`.
+- **Online copy** with the `sqlite3` CLI on the host
+  (`sudo dnf install -y sqlite`):
+  `sudo sqlite3 /var/lib/docker/volumes/goload_goload-data/_data/goload.db ".backup /root/goload-backup.db"`.
+
 ## 3. Cost model
 
 > All prices are **approximate list prices (us-east-1 / eu-central-1, Linux,
@@ -234,9 +255,10 @@ scripts must stay in sync.
 | Elastic IP / public IPv4 (≈ 0.005 USD/h) | ≈ 3.6 USD |
 | EBS snapshots, SSM, CloudWatch basics, ECR storage | ≈ 2-5 USD |
 | **Total, t3.small** | **≈ 25-30 USD** |
-| `t3.medium` instead (bigger DB / UI load) | ≈ 45-60 USD |
+| `t3.medium` instead (bigger UI load / many concurrent runs) | ≈ 45-60 USD |
 
-Moving to RDS later adds roughly 15-30 USD/month for the smallest instance
+The database is a SQLite file on the root volume, so it costs nothing extra.
+Moving to RDS instead adds roughly 15-30 USD/month for the smallest instance
 classes.
 
 ### Per test
@@ -335,16 +357,19 @@ Then remove the stack:
 
 ```bash
 cd deploy/aws
-# 1. Back up the database if you need it:
-#    docker compose exec postgres pg_dump -U goload goload > goload.sql
+# 1. Back up the database if you need it (on the master; the runtime image
+#    has no shell, so copy the file from the volume while the master is stopped):
+#    cd /opt/goload && sudo docker compose stop master
+#    sudo cp /var/lib/docker/volumes/goload_goload-data/_data/goload.db ~/goload-backup.db
+#    sudo docker compose start master
 # 2. Allow termination of the master:
 terraform apply -var master_termination_protection=false
 # 3. Destroy:
 terraform destroy
 ```
 
-The master's root volume uses `delete_on_termination = false` so that
-PostgreSQL data survives an accidental replacement. Delete it by hand after
+The master's root volume uses `delete_on_termination = false` so that the
+SQLite database survives an accidental replacement. Delete it by hand after
 `destroy`:
 
 ```bash

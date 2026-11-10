@@ -1,5 +1,5 @@
-# goload on AWS: one always-on master (UI + API + gRPC coordinator +
-# PostgreSQL via Docker Compose) and a launch template the master uses to
+# goload on AWS: one always-on master (UI + API + gRPC coordinator, with
+# its SQLite database on the root EBS volume, via Docker Compose) and a launch template the master uses to
 # start short-lived spot workers per run. See docs/aws.md.
 
 data "aws_partition" "current" {}
@@ -43,7 +43,6 @@ locals {
   ssm_params = {
     api_token    = "${local.ssm_prefix}/api-token"
     worker_token = "${local.ssm_prefix}/worker-token"
-    db_password  = "${local.ssm_prefix}/db-password"
     master_addr  = "${local.ssm_prefix}/master-grpc-addr"
   }
 
@@ -67,11 +66,6 @@ resource "random_password" "worker_token" {
   special = false
 }
 
-resource "random_password" "db_password" {
-  length  = 32
-  special = false
-}
-
 resource "aws_ssm_parameter" "api_token" {
   name        = local.ssm_params.api_token
   description = "goload REST API / UI bearer token"
@@ -84,13 +78,6 @@ resource "aws_ssm_parameter" "worker_token" {
   description = "goload master <-> worker shared secret"
   type        = "SecureString"
   value       = coalesce(var.worker_token, random_password.worker_token.result)
-}
-
-resource "aws_ssm_parameter" "db_password" {
-  name        = local.ssm_params.db_password
-  description = "goload PostgreSQL password"
-  type        = "SecureString"
-  value       = random_password.db_password.result
 }
 
 # Written after the master exists. The worker launch template reads it at
@@ -345,7 +332,6 @@ data "aws_iam_policy_document" "master" {
     resources = [
       aws_ssm_parameter.api_token.arn,
       aws_ssm_parameter.worker_token.arn,
-      aws_ssm_parameter.db_password.arn,
     ]
   }
 }
@@ -480,7 +466,7 @@ resource "aws_instance" "master" {
     volume_size           = var.master_volume_gb
     volume_type           = "gp3"
     encrypted             = true
-    delete_on_termination = false # keeps PostgreSQL data if the instance is replaced
+    delete_on_termination = false # keeps the SQLite database if the instance is replaced
     tags                  = { Name = "${local.name}-master-root" }
   }
 
@@ -494,7 +480,6 @@ resource "aws_instance" "master" {
     api_token_param       = local.ssm_params.api_token
     worker_token_param    = local.ssm_params.worker_token
     allowed_targets       = var.allowed_targets
-    db_password_param     = local.ssm_params.db_password
     launch_template_id    = aws_launch_template.worker.id
     worker_subnet_ids     = join(",", var.worker_subnet_ids)
     worker_instance_types = join(",", var.worker_instance_types)

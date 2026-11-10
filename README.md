@@ -18,18 +18,19 @@ make serve                       # builds the UI + binary, starts on :8080
 open http://localhost:8080
 ```
 
-`make serve` keeps data in memory (lost on exit) and allows any target. For
-persistent data run Postgres (`brew install postgresql@16`) and start with
-`-db 'postgres://...'` as shown below.
+`make serve` keeps tests, runs, metrics and error groups in `./goload.db`
+(SQLite, created on first start; survives restarts) and allows any target. No
+database server is needed. `GOLOAD_DB=memory make serve` gives a throwaway
+store instead.
 
-Requirements: Go 1.24+, Node 22 + pnpm (for the UI build), PostgreSQL 16 (optional; there is an in-memory mode).
+Requirements: Go 1.24+, Node 22 + pnpm (for the UI build). PostgreSQL 16 is optional (see [Data and backups](#data-and-backups)).
 
 ```bash
 make build                                   # builds web/ then bin/goloadtest
 ./bin/goloadtest run examples/smoke.yaml     # CLI only, no server
 ```
 
-Master with UI, in-memory store, single node:
+Master with UI, single node, data in `./goload.db`:
 
 ```bash
 GOLOAD_ALLOWED_TARGETS='*' ./bin/goloadtest serve -grpc-addr ""
@@ -46,7 +47,35 @@ export GOLOAD_WORKER_TOKEN=$(openssl rand -hex 32)
 ./bin/goloadtest worker -master 127.0.0.1:9090 &
 ```
 
-Docker Compose (master + Postgres): copy `deploy/env.example` to `.env`, fill it in, then run `docker compose up -d`. For AWS (spot workers, Terraform) see [docs/aws.md](docs/aws.md).
+Docker Compose (master, SQLite in the `goload-data` volume at `/data/goload.db`): copy `deploy/env.example` to `.env`, fill it in, then run `docker compose up -d`. For PostgreSQL add the override: `docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d`. For AWS (spot workers, Terraform) see [docs/aws.md](docs/aws.md).
+
+### Data and backups
+
+`serve -db` (or `GOLOAD_DB`) picks the store:
+
+| Value | Store |
+|---|---|
+| `sqlite:./goload.db` (default), `sqlite:/data/goload.db`, or a path ending in `.db` | SQLite file (pure Go, no CGO); the directory is created if needed |
+| `postgres://user:pass@host:5432/goload?sslmode=disable` (or `postgresql://`) | PostgreSQL 16 |
+| `memory` | In-memory, lost on exit |
+
+The startup log names the store in use. Schema migrations run automatically on
+start for both SQLite and PostgreSQL. SQLite runs in WAL mode, so next to
+`goload.db` you will see `goload.db-wal` and `goload.db-shm` while the master
+runs; treat the three as one. One master per database file: SQLite fits the
+single-master design (workers never touch the database). Use PostgreSQL if you
+already run one or want managed backups (e.g. RDS).
+
+Back up the SQLite store with either:
+
+```bash
+sqlite3 goload.db ".backup backup.db"   # safe while the master is running
+cp goload.db backup.db                  # only while the master is stopped
+```
+
+Restore by stopping the master and putting the backup in place as `goload.db`
+(delete any stale `goload.db-wal` / `goload.db-shm`). Switching between SQLite
+and PostgreSQL does not migrate existing data.
 
 ## Scenario format
 
@@ -121,7 +150,7 @@ See [docs/security.md](docs/security.md). In short:
 
 ```bash
 make test                                    # go test -race ./...
-GOLOAD_TEST_DSN='postgres://...' make test   # also runs the store suite on Postgres
+GOLOAD_TEST_DSN='postgres://...' make test   # also runs the store suite on Postgres (SQLite always runs)
 cd web && pnpm mock & pnpm dev               # UI against a mock API on :8080
 make proto                                   # regenerate gRPC code (needs protoc)
 scripts/compare-k6.sh http://target/health 200 60s   # accuracy check vs k6
@@ -137,7 +166,7 @@ scripts/compare-k6.sh http://target/health 200 60s   # accuracy check vs k6
 | `internal/runner` | Run lifecycle: local or distributed, persistence, live fan-out |
 | `internal/cluster` | gRPC master and worker, load split, per-second merge |
 | `internal/provision` | AWS spot worker launch and terminate |
-| `internal/store` | Postgres and in-memory stores, migrations |
+| `internal/store` | SQLite (default), Postgres and in-memory stores, migrations |
 | `internal/api` | REST API, SSE live stream, embedded UI |
 | `internal/allowlist` | Target allowlist |
 | `web/` | React + TypeScript UI |

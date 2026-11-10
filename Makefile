@@ -15,10 +15,13 @@ build: ui
 run:
 	go run ./cmd/goloadtest
 
-# Local UI on http://localhost:8080: in-memory store (data is lost on exit),
+# Local UI on http://localhost:8080: data persists in ./goload.db (SQLite),
 # single node, any target allowed. For development only.
+# GOLOAD_DB=memory for a throwaway store, GOLOAD_DB='postgres://...' for PostgreSQL.
+GOLOAD_DB ?= sqlite:./goload.db
+
 serve: build
-	GOLOAD_ALLOWED_TARGETS='*' ./bin/goloadtest serve -grpc-addr ""
+	GOLOAD_ALLOWED_TARGETS='*' GOLOAD_DB='$(GOLOAD_DB)' ./bin/goloadtest serve -grpc-addr ""
 
 test:
 	go test -race -count=1 $(PKG)

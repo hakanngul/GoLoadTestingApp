@@ -67,9 +67,13 @@ type migration struct {
 	sql     string
 }
 
-// loadMigrations reads migrations/NNNN_name.sql, sorted by version.
-func loadMigrations() ([]migration, error) {
-	entries, err := fs.ReadDir(migrationFS, "migrations")
+// loadMigrations reads the PostgreSQL migrations/NNNN_name.sql, sorted by
+// version.
+func loadMigrations() ([]migration, error) { return loadMigrationsFrom(migrationFS, "migrations") }
+
+// loadMigrationsFrom reads dir/NNNN_name.sql from fsys, sorted by version.
+func loadMigrationsFrom(fsys fs.FS, dir string) ([]migration, error) {
+	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		return nil, fmt.Errorf("store: read migrations: %w", err)
 	}
@@ -89,7 +93,7 @@ func loadMigrations() ([]migration, error) {
 			return nil, fmt.Errorf("store: duplicate migration version %d (%s, %s)", v, prev, name)
 		}
 		seen[v] = name
-		body, err := migrationFS.ReadFile("migrations/" + name)
+		body, err := fs.ReadFile(fsys, dir+"/"+name)
 		if err != nil {
 			return nil, fmt.Errorf("store: read migration %s: %w", name, err)
 		}
