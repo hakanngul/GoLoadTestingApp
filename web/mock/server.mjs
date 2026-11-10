@@ -1092,7 +1092,7 @@ function withLastRun(t) {
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
+  const url = new URL(req.url, 'http://localhost');
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
   const m = req.method;
   if (parts[0] !== 'api') return apiErr(res, 404, 'not found');

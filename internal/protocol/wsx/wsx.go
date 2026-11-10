@@ -204,6 +204,9 @@ func New(sc *scenario.Scenario, opts Options) (*Executor, error) {
 	return e, nil
 }
 
+// schemeSep separates a URL's scheme from the rest.
+const schemeSep = "://"
+
 // wsBase maps an http(s) base URL to ws(s). An empty base is allowed; then
 // every ws step needs an absolute URL.
 func wsBase(base string) (string, error) {
@@ -211,14 +214,15 @@ func wsBase(base string) (string, error) {
 	if base == "" {
 		return "", nil
 	}
-	lb := strings.ToLower(base)
-	switch {
-	case strings.HasPrefix(lb, "http://"):
-		return "ws://" + base[len("http://"):], nil
-	case strings.HasPrefix(lb, "https://"):
-		return "wss://" + base[len("https://"):], nil
-	case strings.HasPrefix(lb, "ws://"), strings.HasPrefix(lb, "wss://"):
-		return base, nil
+	if scheme, rest, ok := strings.Cut(base, schemeSep); ok {
+		switch strings.ToLower(scheme) {
+		case "http":
+			return "ws" + schemeSep + rest, nil
+		case "https":
+			return "wss" + schemeSep + rest, nil
+		case "ws", "wss":
+			return base, nil
+		}
 	}
 	return "", fmt.Errorf("wsx: target base_url %q: want http(s):// or ws(s)://", base)
 }

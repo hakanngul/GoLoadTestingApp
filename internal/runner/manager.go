@@ -466,12 +466,13 @@ func baseName(p string) string { return filepath.Base(p) }
 func targetURLs(sc *scenario.Scenario) []string {
 	urls := []string{sc.Target.BaseURL}
 	for _, st := range sc.Steps {
-		p := strings.ToLower(st.Path)
-		for _, scheme := range []string{"http://", "https://", "ws://", "wss://"} {
-			if strings.HasPrefix(p, scheme) {
-				urls = append(urls, st.Path)
-				break
-			}
+		scheme, _, ok := strings.Cut(strings.ToLower(st.Path), "://")
+		if !ok {
+			continue
+		}
+		switch scheme {
+		case "http", "https", "ws", "wss":
+			urls = append(urls, st.Path)
 		}
 	}
 	return urls

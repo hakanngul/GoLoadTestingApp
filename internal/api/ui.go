@@ -1,12 +1,28 @@
 package api
 
 import (
-	"errors"
 	"io/fs"
 	"net/http"
 	"path"
 	"strings"
 )
+
+// uiFileSet lists the regular files of the (embedded, read-only) UI file
+// system, mapping each path to itself. serveUI only opens names taken from
+// this set, never the request path itself. Nil for a nil fsys.
+func uiFileSet(fsys fs.FS) map[string]string {
+	if fsys == nil {
+		return nil
+	}
+	files := map[string]string{}
+	_ = fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			files[name] = name
+		}
+		return nil // skip unreadable entries; they are served as missing
+	})
+	return files
+}
 
 // serveUI serves the embedded single-page app. Existing files are served
 // as-is (hashed /assets/* with a one-year immutable cache); unknown paths
@@ -28,16 +44,13 @@ func (s *server) serveUI(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "index.html"
 	}
-	if fi, err := fs.Stat(s.ui, name); err == nil && !fi.IsDir() {
-		if strings.HasPrefix(name, "assets/") {
+	if file, ok := s.uiFiles[name]; ok {
+		if strings.HasPrefix(file, "assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
-		http.ServeFileFS(w, r, s.ui, name)
-		return
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		http.ServeFileFS(w, r, s.ui, file)
 		return
 	}
 
@@ -45,7 +58,7 @@ func (s *server) serveUI(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if _, err := fs.Stat(s.ui, "index.html"); err != nil {
+	if _, ok := s.uiFiles["index.html"]; !ok {
 		http.NotFound(w, r)
 		return
 	}

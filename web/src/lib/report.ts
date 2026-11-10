@@ -209,7 +209,7 @@ export function worstDelta(c: Comparison | undefined | null): MetricDelta | unde
   );
   if (worse.length === 0) return undefined;
   const tol = c.tolerance > 0 ? c.tolerance : 0.1;
-  return worse.reduce((a, b) => (severity(b, tol) > severity(a, tol) ? b : a));
+  return worse.reduce((a, b) => (severity(b, tol) > severity(a, tol) ? b : a), worse[0]);
 }
 
 /** The most improved metric (for a "Better" badge), if any. */
@@ -218,7 +218,7 @@ export function bestDelta(c: Comparison | undefined | null): MetricDelta | undef
   const better = (c.metrics ?? []).filter((m) => m.verdict === 'better' && Number.isFinite(m.delta));
   if (better.length === 0) return undefined;
   const tol = c.tolerance > 0 ? c.tolerance : 0.1;
-  return better.reduce((a, b) => (severity(b, tol) < severity(a, tol) ? b : a));
+  return better.reduce((a, b) => (severity(b, tol) < severity(a, tol) ? b : a), better[0]);
 }
 
 /** "p95 +23%" for the worst regression, '' when there is none. */

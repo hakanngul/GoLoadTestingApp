@@ -893,7 +893,8 @@ function LabelNotes({ run, onSaved }: { run: Run; onSaved: (r: Run) => void }) {
                 autoFocus
                 onChange={(e) => setLabel(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') save();
+                  // save() reports its own errors through setErr.
+                  if (e.key === 'Enter') void save();
                   if (e.key === 'Escape') setEditing(false);
                 }}
               />
@@ -909,7 +910,7 @@ function LabelNotes({ run, onSaved }: { run: Run; onSaved: (r: Run) => void }) {
                 placeholder="What changed, environment, links…"
                 onChange={(e) => setNotes(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save();
                   if (e.key === 'Escape') setEditing(false);
                 }}
               />

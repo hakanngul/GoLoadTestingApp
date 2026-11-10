@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
@@ -48,14 +47,32 @@ const sqlitePrunable = `r.status NOT IN ('queued', 'running')
 		WHERE l.test_id = r.test_id AND l.status NOT IN ('queued', 'running')
 		ORDER BY l.started_at DESC, l.id DESC LIMIT 1)`
 
+// sqlitePruneCandidatesSQL lists the prunable runs, oldest first; its
+// single parameter is the cutoff in microseconds.
+const sqlitePruneCandidatesSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.started_at, r.finished_at
+		FROM runs r WHERE r.status NOT IN ('queued', 'running')
+	AND COALESCE(r.finished_at, r.started_at) < ?
+	AND NOT EXISTS (SELECT 1 FROM tests t WHERE t.baseline_run_id = r.id)
+	AND r.id <> (SELECT l.id FROM runs l
+		WHERE l.test_id = r.test_id AND l.status NOT IN ('queued', 'running')
+		ORDER BY l.started_at DESC, l.id DESC LIMIT 1) ORDER BY r.started_at, r.id`
+
+// sqlitePruneDeleteSQL deletes one run if it is still prunable; its
+// parameters are the run ID and the cutoff in microseconds.
+const sqlitePruneDeleteSQL = `DELETE FROM runs AS r WHERE r.id = ? AND r.status NOT IN ('queued', 'running')
+	AND COALESCE(r.finished_at, r.started_at) < ?
+	AND NOT EXISTS (SELECT 1 FROM tests t WHERE t.baseline_run_id = r.id)
+	AND r.id <> (SELECT l.id FROM runs l
+		WHERE l.test_id = r.test_id AND l.status NOT IN ('queued', 'running')
+		ORDER BY l.started_at DESC, l.id DESC LIMIT 1) RETURNING id`
+
 var _ Pruner = (*SQLite)(nil)
 
 // PruneRuns deletes old finished runs except baselines and each test's
 // latest finished run (see Pruner), then reclaims the freed space.
 func (s *SQLite) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool) ([]PrunedRun, error) {
 	cutoff := toMicros(olderThan)
-	rows, err := s.r.QueryContext(ctx, `SELECT r.id, r.test_id, r.test_name, r.status, r.started_at, r.finished_at
-		FROM runs r WHERE `+sqlitePrunable+` ORDER BY r.started_at, r.id`, cutoff)
+	rows, err := s.r.QueryContext(ctx, sqlitePruneCandidatesSQL, cutoff)
 	if err != nil {
 		return nil, sqliteErr(err)
 	}
@@ -85,34 +102,37 @@ func (s *SQLite) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool
 		return cands, nil
 	}
 
-	// Delete in chunks, re-checking the condition: a run may have become
-	// a baseline since it was selected.
+	// Delete in chunks (one transaction each), re-checking the condition
+	// per run: a run may have become a baseline since it was selected.
 	deleted := make(map[string]bool, len(cands))
 	for start := 0; start < len(cands); start += sqlitePruneChunk {
 		chunk := cands[start:min(start+sqlitePruneChunk, len(cands))]
-		args := make([]any, 0, len(chunk)+1)
-		for _, p := range chunk {
-			args = append(args, p.ID)
-		}
-		args = append(args, cutoff)
+		// Only report a chunk's deletions once its transaction commits; a
+		// rollback leaves those runs in place.
+		var done []string
 		err := sqliteTx(ctx, s.w, func(tx *sql.Tx) error {
-			rows, err := tx.QueryContext(ctx, `DELETE FROM runs AS r WHERE r.id IN (?`+
-				strings.Repeat(", ?", len(chunk)-1)+`) AND `+sqlitePrunable+` RETURNING id`, args...)
+			done = done[:0]
+			stmt, err := tx.PrepareContext(ctx, sqlitePruneDeleteSQL)
 			if err != nil {
 				return sqliteErr(err)
 			}
-			defer rows.Close()
-			for rows.Next() {
-				var id string
-				if err := rows.Scan(&id); err != nil {
-					return sqliteErr(err)
+			defer stmt.Close()
+			for _, p := range chunk {
+				ok, err := sqlitePruneOne(ctx, stmt, p.ID, cutoff)
+				if err != nil {
+					return err
 				}
-				deleted[id] = true
+				if ok {
+					done = append(done, p.ID)
+				}
 			}
-			return sqliteErr(rows.Err())
+			return nil
 		})
 		if err != nil {
 			return pickPruned(cands, deleted), err
+		}
+		for _, id := range done {
+			deleted[id] = true
 		}
 	}
 	out := pickPruned(cands, deleted)
@@ -122,6 +142,21 @@ func (s *SQLite) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool
 		}
 	}
 	return out, nil
+}
+
+// sqlitePruneOne runs the prepared sqlitePruneDeleteSQL for one run and
+// reports whether it deleted it.
+func sqlitePruneOne(ctx context.Context, stmt *sql.Stmt, id string, cutoff int64) (bool, error) {
+	rows, err := stmt.QueryContext(ctx, id, cutoff)
+	if err != nil {
+		return false, sqliteErr(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		found = true
+	}
+	return found, sqliteErr(rows.Err())
 }
 
 // pickPruned keeps the candidates that were actually deleted.

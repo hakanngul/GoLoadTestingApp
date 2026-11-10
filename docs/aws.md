@@ -164,6 +164,25 @@ important ones:
 | `spot_only`, `spot_max_price` | `false`, `""` | An empty max price means the on-demand price is the cap. |
 | `worker_egress_cidrs` | `0.0.0.0/0` | Narrow this to add a network-level target allowlist. Workers still need registry, OS and SSM endpoints. |
 | `master_termination_protection` | `true` | Protects the database on the master. |
+| `master_associate_public_ip` | `null` | Auto-assigned public IPv4 for the master at launch; `null` follows the subnet's auto-assign setting. See below. |
+
+**Public IPs and private subnets.** The master needs outbound internet
+access (image pulls, the Docker Compose download, SSM, the EC2 API). By
+default (`master_associate_public_ip = null`) it gets a public IPv4 address if
+`master_subnet_id` auto-assigns one, as before; `master_public_ip` adds the
+Elastic IP on top. To keep the master off the internet entirely:
+
+1. put it in a private subnet whose route table sends `0.0.0.0/0` to a NAT
+   gateway (or give it VPC interface endpoints for `ssm`, `ssmmessages`,
+   `ec2messages`, `ec2`, `ecr.api`, `ecr.dkr`, plus the S3 gateway endpoint),
+2. set `master_associate_public_ip = false` and `master_public_ip = false`,
+3. reach the UI through SSM port forwarding (section 2.4).
+
+Changing `master_associate_public_ip` on an existing deployment replaces the
+master instance. Workers take their public IPv4 address from the worker
+subnets' auto-assign setting (they accept no inbound traffic). Workers in
+private subnets behind a NAT also work, but every request and response then
+passes through the NAT and is billed per GB (see the cost section).
 
 What gets created: two security groups (the master accepts `8080` from
 `admin_cidrs` and `9090` from the worker SG only; workers accept **no
