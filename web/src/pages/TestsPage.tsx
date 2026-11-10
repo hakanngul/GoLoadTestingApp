@@ -10,11 +10,13 @@ import { summarizeYaml, unitFor } from '../lib/scenario';
 
 // The dialog renders a recharts preview; load it (and recharts) on demand.
 const RunStartDialog = lazy(() => import('../components/RunStartDialog').then((m) => ({ default: m.RunStartDialog })));
+const ScheduleDialog = lazy(() => import('../components/ScheduleDialog').then((m) => ({ default: m.ScheduleDialog })));
 
 export function TestsPage() {
   const nav = useNavigate();
   const tests = useAsync(() => api.listTests(), [], 10000);
   const [runFor, setRunFor] = useState<Test | null>(null);
+  const [schedFor, setSchedFor] = useState<Test | null>(null);
   const [choosing, setChoosing] = useState(false);
   const [deleting, setDeleting] = useState<Test | null>(null);
   const [delBusy, setDelBusy] = useState(false);
@@ -122,6 +124,9 @@ export function TestsPage() {
                         <button className="btn sm" onClick={() => setRunFor(t)} title="Run test">
                           <Icon name="play" size={11} /> Run
                         </button>
+                        <button className="btn sm ghost" onClick={() => setSchedFor(t)} title="Schedule runs of this test">
+                          <Icon name="calendar" size={13} /> Schedule
+                        </button>
                         <button className="btn sm ghost" onClick={() => nav(`/tests/${t.id}`)} title="Edit">
                           <Icon name="edit" size={14} /> Edit
                         </button>
@@ -152,12 +157,24 @@ export function TestsPage() {
           <RunStartDialog test={runFor} onClose={() => setRunFor(null)} />
         </Suspense>
       )}
+      {schedFor && (
+        <Suspense fallback={null}>
+          <ScheduleDialog
+            test={schedFor}
+            onClose={() => setSchedFor(null)}
+            onSaved={(sc) => {
+              setSchedFor(null);
+              nav(`/schedules?focus=${sc.id}`);
+            }}
+          />
+        </Suspense>
+      )}
       {deleting && (
         <ConfirmDialog
           title="Delete test?"
           message={
             <>
-              <strong>{deleting.name}</strong> and its attached data files will be deleted. This cannot be undone.
+              <strong>{deleting.name}</strong>, its attached data files and its schedules will be deleted. This cannot be undone.
             </>
           }
           busy={delBusy}

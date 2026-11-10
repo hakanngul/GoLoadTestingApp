@@ -5,7 +5,7 @@ import { isFinished, type Comparison, type LiveStats, type MetricPoint, type Run
 import { RunCharts } from '../components/charts';
 import { FailuresTable, LiveStatsPanel } from '../components/livestats';
 import { BaselineBadge, DeltaText, Menu, MetricDeltaTable, OverallBadge, RunLabel, WindowControl } from '../components/report';
-import { ConfirmDialog, ErrorAlert, Icon, Kpi, Loading, Modal, StatusBadge } from '../components/ui';
+import { ConfirmDialog, ErrorAlert, Icon, Kpi, Loading, Modal, ScheduledBadge, StatusBadge } from '../components/ui';
 import {
   fmtClock,
   fmtCompact,
@@ -72,6 +72,7 @@ function RunHeader({ run, children }: { run: Run; children?: ReactNode }) {
           </Link>
           <StatusBadge status={run.status} />
           <RunLabel label={run.label} size="lg" />
+          <ScheduledBadge scheduleId={run.schedule_id} size="lg" />
         </h1>
       </div>
       <span className="spacer" />

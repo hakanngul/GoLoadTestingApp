@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import type { RunStatus } from '../api/types';
 import { errorText } from '../api/client';
 
@@ -87,6 +88,18 @@ const paths: Record<string, ReactNode> = {
     </>
   ),
   moon: <path d="M13 9.5A5.5 5.5 0 016.5 3a5.5 5.5 0 106.5 6.5z" />,
+  clock: (
+    <>
+      <circle cx="8" cy="8" r="5.8" />
+      <path d="M8 4.8V8l2.2 1.5" />
+    </>
+  ),
+  calendar: (
+    <>
+      <rect x="2.5" y="3.5" width="11" height="10" rx="1.2" />
+      <path d="M2.5 6.5h11M5.5 2v3M10.5 2v3" />
+    </>
+  ),
   monitor: (
     <>
       <rect x="2" y="2.5" width="12" height="8.5" rx="1" />
@@ -147,6 +160,21 @@ const statusClass: Record<RunStatus, string> = {
 export function StatusBadge({ status }: { status: RunStatus | undefined }) {
   if (!status) return <span className="muted">never run</span>;
   return <span className={`badge ${statusClass[status] ?? ''}`}>{status}</span>;
+}
+
+/** "Scheduled" badge of a run started by a schedule (links to it). */
+export function ScheduledBadge({ scheduleId, size }: { scheduleId: string | undefined; size?: 'lg' }) {
+  if (!scheduleId) return null;
+  return (
+    <Link
+      to={`/schedules?focus=${encodeURIComponent(scheduleId)}`}
+      className={`sched-badge ${size ?? ''}`}
+      title="Started by a schedule — open it"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <Icon name="clock" size={size === 'lg' ? 12 : 11} /> scheduled
+    </Link>
+  );
 }
 
 export function WorkerStateBadge({ state }: { state: string }) {

@@ -62,6 +62,10 @@ type Run struct {
 	Error      string            `json:"error,omitempty"`
 	Label      string            `json:"label"` // short tag, e.g. "v1.4.2" (<= 100 chars)
 	Notes      string            `json:"notes"` // free text (<= 10k chars)
+	// ScheduleID is the schedule that started the run ("" = started by
+	// hand). It is set when the run is created and never changes; the
+	// schedule may have been deleted since.
+	ScheduleID string `json:"schedule_id,omitempty"`
 }
 
 // Summary is an aggregate over a time window (whole run or one step).
@@ -267,6 +271,9 @@ type StartRunRequest struct {
 	Workers int    `json:"workers"` // 0 => 1 (local)
 	Label   string `json:"label,omitempty"`
 	Notes   string `json:"notes,omitempty"`
+	// ScheduleID is set by the scheduler (never from a request body) and
+	// recorded as Run.ScheduleID.
+	ScheduleID string `json:"-"`
 }
 
 // UpdateRunRequest is the body of PATCH /api/runs/{id}; nil = unchanged.
@@ -435,3 +442,122 @@ const MaxErrorGroups = 100
 
 // ErrorGroupOther is the Message of the overflow group.
 const ErrorGroupOther = "(other errors)"
+
+// ---- Schedules ----
+
+// ScheduleKind selects how a schedule fires.
+type ScheduleKind string
+
+const (
+	// ScheduleOnce fires once at ScheduleSpec.At, then disables itself.
+	ScheduleOnce ScheduleKind = "once"
+	// ScheduleRecurring fires at every time matching ScheduleSpec.Cron.
+	ScheduleRecurring ScheduleKind = "recurring"
+)
+
+// OverlapPolicy decides what a schedule does when it fires while another
+// run is active on the server.
+type OverlapPolicy string
+
+const (
+	// OverlapSkip (default) skips the occurrence (last_status skipped).
+	OverlapSkip OverlapPolicy = "skip"
+	// OverlapQueue waits until no run is active, at most
+	// ScheduleSpec.QueueTimeoutMs, then starts the run or skips it.
+	OverlapQueue OverlapPolicy = "queue"
+)
+
+// Load override modes (LoadOverride.Mode).
+const (
+	// LoadScale keeps the scenario's stage shape and model and scales
+	// every stage target so the peak equals Users (closed) or Rate (open).
+	LoadScale = "scale"
+	// LoadProfile replaces the stages with ramp-up, hold and an optional
+	// ramp-down to 0; Users selects the closed model, Rate the open one.
+	LoadProfile = "profile"
+)
+
+// LoadOverride changes the load of a scheduled run. Exactly one of Users
+// and Rate is set. The stored test is never modified: the override is
+// applied to a copy of the scenario when the schedule fires.
+type LoadOverride struct {
+	Mode       string  `json:"mode"`                   // scale | profile
+	Users      int     `json:"users,omitempty"`        // peak virtual users (closed model)
+	Rate       int     `json:"rate,omitempty"`         // peak iterations per second (open model)
+	RampUpMs   float64 `json:"ramp_up_ms,omitempty"`   // profile: 0 = start at full load
+	HoldMs     float64 `json:"hold_ms,omitempty"`      // profile: required (> 0)
+	RampDownMs float64 `json:"ramp_down_ms,omitempty"` // profile: 0 = stop at full load
+}
+
+// ScheduleSpec is the user-editable part of a schedule.
+type ScheduleSpec struct {
+	TestID string       `json:"test_id"`
+	Name   string       `json:"name"`
+	Kind   ScheduleKind `json:"kind"`
+	// At is the local wall-clock time of a once schedule in Timezone,
+	// "YYYY-MM-DDTHH:MM".
+	At string `json:"at,omitempty"`
+	// Cron is the 5-field cron expression of a recurring schedule
+	// (minute hour day-of-month month day-of-week), evaluated in Timezone.
+	Cron string `json:"cron,omitempty"`
+	// Timezone is an IANA name such as Europe/Istanbul (default UTC).
+	Timezone string        `json:"timezone"`
+	Load     *LoadOverride `json:"load,omitempty"` // nil = scenario load as is
+	Workers  int           `json:"workers"`        // 0 => 1 (local)
+	Label    string        `json:"label"`          // run label; "" = "scheduled: <name>"
+	Notes    string        `json:"notes"`          // copied to the run
+	Overlap  OverlapPolicy `json:"overlap"`        // default skip
+	// QueueTimeoutMs bounds the wait of the queue policy (default 30 min).
+	QueueTimeoutMs int64 `json:"queue_timeout_ms,omitempty"`
+}
+
+// Schedule status values (Schedule.LastStatus).
+const (
+	ScheduleStarted = "started" // a run was started (LastRunID)
+	ScheduleQueued  = "queued"  // waiting for active runs to finish
+	ScheduleSkipped = "skipped" // another run was active
+	ScheduleMissed  = "missed"  // the server was not running at fire time
+	ScheduleError   = "error"   // the run could not be started (LastMessage)
+)
+
+// Schedule starts runs of a test at planned times. GET /api/schedules.
+type Schedule struct {
+	ID string `json:"id"`
+	ScheduleSpec
+	TestName  string    `json:"test_name"` // filled on read
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	// NextRunAt is the next fire time (nil when disabled or done).
+	NextRunAt *time.Time `json:"next_run_at,omitempty"`
+	// LastRunAt is the due time of the last occurrence handled (started,
+	// queued, skipped, missed or error) or the time of a run-now.
+	LastRunAt   *time.Time `json:"last_run_at,omitempty"`
+	LastRunID   string     `json:"last_run_id,omitempty"`
+	LastStatus  string     `json:"last_status,omitempty"`
+	LastMessage string     `json:"last_message,omitempty"`
+}
+
+// ScheduleRequest is the body of POST /api/schedules and
+// PUT /api/schedules/{id}. Enabled defaults to true.
+type ScheduleRequest struct {
+	ScheduleSpec
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// SchedulePreviewRequest is the body of POST /api/schedules/preview.
+type SchedulePreviewRequest struct {
+	Kind     ScheduleKind `json:"kind"`
+	At       string       `json:"at,omitempty"`
+	Cron     string       `json:"cron,omitempty"`
+	Timezone string       `json:"timezone"`
+	Count    int          `json:"count,omitempty"` // default 5, max 50
+}
+
+// SchedulePreview lists upcoming fire times (RFC 3339 instants) or the
+// validation problems of the definition.
+type SchedulePreview struct {
+	Valid  bool        `json:"valid"`
+	Errors []string    `json:"errors"`
+	Times  []time.Time `json:"times"`
+}

@@ -56,6 +56,21 @@
 //	PUT    /api/tests/{id}/baseline          {"run_id": "..."} (or "" to clear) -> model.Test
 //	GET    /api/reports/overview?days=30     -> model.Overview
 //
+//	Schedules (internal/scheduler; 503 when the server has no scheduler):
+//	GET    /api/schedules?test_id=           -> []model.Schedule (oldest first; test_name filled)
+//	POST   /api/schedules                    model.ScheduleRequest -> 201 model.Schedule
+//	                                         (400 "invalid schedule", Details = "field: message"; enabled
+//	                                         defaults to true; next_run_at computed from the definition)
+//	GET    /api/schedules/{id}               -> model.Schedule
+//	PUT    /api/schedules/{id}               model.ScheduleRequest -> model.Schedule (next run recomputed
+//	                                         from now; last_* kept)
+//	DELETE /api/schedules/{id}               -> 204 (runs it started keep schedule_id)
+//	POST   /api/schedules/{id}/run-now       -> 201 model.Run (starts now with the schedule's overrides,
+//	                                         ignoring timing, enabled and overlap; next_run_at unchanged)
+//	POST   /api/schedules/preview            model.SchedulePreviewRequest {kind, at|cron, timezone, count}
+//	                                         -> model.SchedulePreview (always 200; next count fire times,
+//	                                         default 5, max 50, or errors)
+//
 //	GET    /*                                embedded UI (web/dist), SPA fallback to index.html
 //
 // Scenario validation for POST/PUT/validate uses scenario.Parse; the data

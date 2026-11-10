@@ -5,6 +5,7 @@ import type { FileInfo, Test, TryFix, TryResult, ValidateResult } from '../api/t
 import { ProfileChart } from '../components/charts';
 import { QuickFormView } from '../components/QuickFormView';
 import { RunStartDialog } from '../components/RunStartDialog';
+import { ScheduleDialog } from '../components/ScheduleDialog';
 import { ScenarioFormView } from '../components/ScenarioFormView';
 import { TryPanel } from '../components/TryPanel';
 import { ErrorAlert, Icon, Loading } from '../components/ui';
@@ -74,6 +75,7 @@ export function TestEditorPage() {
   const [validating, setValidating] = useState(false);
   const [validateErr, setValidateErr] = useState<unknown>(null);
   const [runOpen, setRunOpen] = useState(false);
+  const [schedOpen, setSchedOpen] = useState(false);
   const [mode, setModeState] = useState<Mode>('advanced');
   /** Quick-mode state; null while in advanced mode or when the YAML stopped being representable. */
   const [quick, setQuick] = useState<QuickForm | null>(null);
@@ -358,6 +360,14 @@ export function TestEditorPage() {
         >
           <Icon name="play" size={11} /> Run
         </button>
+        <button
+          className="btn"
+          disabled={isNew || dirty}
+          title={isNew || dirty ? 'Save changes before scheduling' : 'Plan runs of this test'}
+          onClick={() => setSchedOpen(true)}
+        >
+          <Icon name="calendar" size={13} /> Schedule
+        </button>
         <button className="btn primary" onClick={save} disabled={saving || (!dirty && !isNew)}>
           {saving ? 'Saving…' : isNew ? 'Create test' : 'Save'}
         </button>
@@ -531,6 +541,16 @@ export function TestEditorPage() {
         />
       )}
       {runOpen && test && <RunStartDialog test={{ ...test, yaml }} onClose={() => setRunOpen(false)} />}
+      {schedOpen && test && (
+        <ScheduleDialog
+          test={{ ...test, yaml }}
+          onClose={() => setSchedOpen(false)}
+          onSaved={(sc) => {
+            setSchedOpen(false);
+            nav(`/schedules?focus=${sc.id}`);
+          }}
+        />
+      )}
       {toast && <div className="toast">{toast}</div>}
     </>
   );

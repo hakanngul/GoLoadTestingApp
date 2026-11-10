@@ -47,6 +47,8 @@ export interface Run {
   label: string;
   /** Free text (<= 10k chars). */
   notes: string;
+  /** Schedule that started the run (absent = started by hand). */
+  schedule_id?: string;
 }
 
 export interface Summary {
@@ -370,4 +372,70 @@ export interface Health {
   version: string;
   /** serve -retention in seconds; 0 (or absent on older servers) = runs are kept forever. */
   retention_seconds?: number;
+}
+
+// ---------- schedules ----------
+
+export type ScheduleKind = 'once' | 'recurring';
+export type OverlapPolicy = 'skip' | 'queue';
+export type ScheduleStatus = 'started' | 'queued' | 'skipped' | 'missed' | 'error';
+
+/** Load override of a scheduled run (exactly one of users / rate). */
+export interface LoadOverride {
+  /** scale: keep the stage shape, scale the peak; profile: ramp-up, hold, ramp-down. */
+  mode: 'scale' | 'profile';
+  users?: number;
+  rate?: number;
+  ramp_up_ms?: number;
+  hold_ms?: number;
+  ramp_down_ms?: number;
+}
+
+export interface ScheduleSpec {
+  test_id: string;
+  name: string;
+  kind: ScheduleKind;
+  /** once: local wall time "YYYY-MM-DDTHH:MM" in timezone. */
+  at?: string;
+  /** recurring: 5-field cron expression evaluated in timezone. */
+  cron?: string;
+  /** IANA zone, e.g. Europe/Istanbul. */
+  timezone: string;
+  load?: LoadOverride;
+  workers: number;
+  label: string;
+  notes: string;
+  overlap: OverlapPolicy;
+  queue_timeout_ms?: number;
+}
+
+export interface Schedule extends ScheduleSpec {
+  id: string;
+  test_name: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  next_run_at?: string;
+  last_run_at?: string;
+  last_run_id?: string;
+  last_status?: ScheduleStatus;
+  last_message?: string;
+}
+
+export interface ScheduleRequest extends ScheduleSpec {
+  enabled?: boolean;
+}
+
+export interface SchedulePreviewRequest {
+  kind: ScheduleKind;
+  at?: string;
+  cron?: string;
+  timezone: string;
+  count?: number;
+}
+
+export interface SchedulePreview {
+  valid: boolean;
+  errors: string[];
+  times: string[];
 }
