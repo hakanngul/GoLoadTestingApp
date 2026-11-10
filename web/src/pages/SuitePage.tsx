@@ -141,7 +141,7 @@ export function SuitePage() {
                 <Icon name="play" size={12} /> {busy ? 'Starting…' : `Run ${s.items.length} test${s.items.length === 1 ? '' : 's'}`}
               </button>
               <p className="hint" style={{ margin: 0 }}>
-                Each test runs with its own saved load settings; every run also appears under Runs.
+                Tests use their saved load unless the suite overrides it (tagged above); every run also appears under Runs.
               </p>
             </div>
           )}
