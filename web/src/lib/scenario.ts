@@ -6,6 +6,7 @@ export type LoadModel = 'open' | 'closed';
 export type DataMode = 'sequential' | 'random' | 'unique';
 export type ExtractSource = 'json' | 'header' | 'regex';
 export type AssertType = 'status' | 'json' | 'duration' | 'body_contains';
+export type StepType = 'http' | 'ws';
 
 export const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const;
 export const DATA_MODES: DataMode[] = ['sequential', 'random', 'unique'];
@@ -61,8 +62,25 @@ export interface FormAssert {
   value: string;
 }
 
+/** One ws.messages entry: send a text message and/or wait for one containing expect. */
+export interface FormWSMessage {
+  send: string;
+  expect: string;
+  timeout: string;
+}
+
+/** The ws block of a WebSocket step (type: ws). */
+export interface FormWS {
+  hold: string;
+  ping_every: string;
+  ping_message: string;
+  messages: FormWSMessage[];
+}
+
 export interface FormStep {
   name: string;
+  /** 'http' (default, omitted from YAML) or 'ws'. */
+  type: StepType;
   method: string;
   path: string;
   headers: KV[];
@@ -70,6 +88,12 @@ export interface FormStep {
   think_time: string;
   extract: FormExtract[];
   assert: FormAssert[];
+  /** WebSocket settings; only used (and emitted) when type is 'ws'. */
+  ws: FormWS;
+}
+
+export function emptyWS(): FormWS {
+  return { hold: '', ping_every: '', ping_message: '', messages: [] };
 }
 
 export interface FormThreshold {
@@ -97,6 +121,8 @@ export function emptyStep(i = 1): FormStep {
     think_time: '',
     extract: [],
     assert: [{ type: 'status', expr: '', op: 'eq', value: '200' }],
+    type: 'http',
+    ws: emptyWS(),
   };
 }
 
@@ -210,9 +236,21 @@ export function yamlToForm(text: string): ParseOutcome {
     },
     steps: arr(doc.steps).map((s, i) => {
       const o = isObj(s) ? s : {};
+      const type: StepType = str(o.type).trim().toLowerCase() === 'ws' ? 'ws' : 'http';
+      const ws = isObj(o.ws) ? o.ws : {};
       return {
         name: str(o.name) || `step ${i + 1}`,
-        method: (str(o.method) || 'GET').toUpperCase(),
+        type,
+        ws: {
+          hold: str(ws.hold),
+          ping_every: str(ws.ping_every),
+          ping_message: str(ws.ping_message),
+          messages: arr(ws.messages).map((m) => {
+            const x = isObj(m) ? m : {};
+            return { send: str(x.send), expect: str(x.expect), timeout: str(x.timeout) };
+          }),
+        },
+        method: type === 'ws' ? '' : (str(o.method) || 'GET').toUpperCase(),
         path: str(o.path),
         headers: kvFromMap(o.headers),
         body: str(o.body),
@@ -273,6 +311,7 @@ export function formToObject(f: ScenarioForm): Obj {
   }
 
   out.steps = f.steps.map((s) => {
+    if (s.type === 'ws') return wsStepToObject(s);
     const o: Obj = { name: s.name, method: s.method, path: s.path };
     const h = kvToMap(s.headers);
     if (h) o.headers = h;
@@ -294,6 +333,29 @@ export function formToObject(f: ScenarioForm): Obj {
     out.thresholds = f.thresholds.map((t) => ({ metric: t.metric, op: t.op, value: num(t.value) }));
   }
   return out;
+}
+
+/** A ws step: no method, body or assert; a ws block instead. */
+function wsStepToObject(s: FormStep): Obj {
+  const o: Obj = { name: s.name, type: 'ws', path: s.path };
+  const h = kvToMap(s.headers);
+  if (h) o.headers = h;
+  const ws: Obj = {};
+  if (s.ws.messages.length)
+    ws.messages = s.ws.messages.map((m) => {
+      const x: Obj = {};
+      if (m.send) x.send = m.send;
+      if (m.expect) x.expect = m.expect;
+      if (m.timeout.trim()) x.timeout = m.timeout.trim();
+      return x;
+    });
+  if (s.ws.hold.trim()) ws.hold = s.ws.hold.trim();
+  if (s.ws.ping_every.trim()) ws.ping_every = s.ws.ping_every.trim();
+  if (s.ws.ping_message) ws.ping_message = s.ws.ping_message;
+  o.ws = ws;
+  if (s.extract.length) o.extract = s.extract.map((e) => ({ var: e.var, from: e.from, expr: e.expr }));
+  if (s.think_time.trim()) o.think_time = s.think_time.trim();
+  return o;
 }
 
 export function formToYaml(f: ScenarioForm): string {

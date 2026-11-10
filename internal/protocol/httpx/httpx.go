@@ -279,6 +279,22 @@ func (e *Executor) Iterate(ctx context.Context, vars map[string]string, intended
 	}
 }
 
+// NumSteps reports how many steps the executor was built with.
+func (e *Executor) NumSteps() int { return len(e.steps) }
+
+// Step executes only step i (0-based, in the order of the scenario passed
+// to New) once and returns its result. It exists for composite executors
+// (see package protocol/executor) that interleave HTTP steps with other
+// protocols; most callers want Iterate.
+//
+// Latency is measured from start, so the caller applies the coordinated
+// omission rule. Step neither sleeps the think time nor modifies vars: on
+// success, extracted holds alternating variable name / value pairs for the
+// caller to apply. If ctx is cancelled the result should be discarded.
+func (e *Executor) Step(ctx context.Context, i int, vars map[string]string, start time.Time) (res protocol.Result, extracted []string) {
+	return e.do(ctx, &e.steps[i], vars, start)
+}
+
 // do executes one step. extracted holds alternating var name / value
 // pairs, applied by the caller only if the step succeeded.
 func (e *Executor) do(ctx context.Context, st *step, vars map[string]string, start time.Time) (protocol.Result, []string) {

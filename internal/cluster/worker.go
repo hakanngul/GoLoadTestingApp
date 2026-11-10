@@ -28,7 +28,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/engine"
 	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol"
-	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/httpx"
+	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/executor"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 )
 
@@ -350,11 +350,11 @@ func (s *session) execute(ctx context.Context, r *workerRun, msg *pb.StartRun) *
 	if err != nil {
 		return fail(err)
 	}
-	exec, err := httpx.New(sc, httpx.Options{})
+	exec, closeExec, err := executor.New(sc, executor.Options{})
 	if err != nil {
 		return fail(err)
 	}
-	defer exec.Close()
+	defer closeExec()
 
 	startAt := time.Unix(0, msg.GetStartAtUnixNano())
 	if msg.GetStartAtUnixNano() == 0 {

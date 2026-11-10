@@ -80,7 +80,19 @@ func (s *Scenario) ApplyDefaults() {
 	}
 	for i := range s.Steps {
 		st := &s.Steps[i]
+		// Type stays empty (= http) when omitted so that existing
+		// scenarios round-trip unchanged.
+		if st.Type != "" {
+			st.Type = StepType(strings.ToLower(strings.TrimSpace(string(st.Type))))
+		}
 		st.Method = strings.ToUpper(strings.TrimSpace(st.Method))
+		if st.IsWS() {
+			// ws steps have no method; Validate rejects one if set.
+			if st.Name == "" {
+				st.Name = "WS " + st.Path
+			}
+			continue
+		}
 		if st.Method == "" {
 			st.Method = DefaultMethod
 		}
@@ -248,6 +260,17 @@ func validateStep(p string, st *Step) []error {
 	if strings.TrimSpace(st.Name) == "" {
 		add(p+".name", "must not be empty")
 	}
+	switch st.Type {
+	case "", StepHTTP:
+		if st.WS != nil {
+			add(p+".ws", "only allowed on steps with type: ws")
+		}
+	case StepWS:
+		errs = append(errs, validateWSStep(p, st)...)
+		return errs
+	default:
+		add(p+".type", "must be http or ws, got %q", st.Type)
+	}
 	if !validMethods[st.Method] {
 		add(p+".method", "unsupported HTTP method %q", st.Method)
 	}
@@ -323,6 +346,101 @@ func validateStep(p string, st *Step) []error {
 				add(ap+".value", "must not be empty")
 			}
 		}
+	}
+	return errs
+}
+
+// validateWSStep validates a step with type ws. Fields shared with HTTP
+// steps (name, headers, think_time) keep their meaning; method, body and
+// assert do not apply; extract reads from the last expected message.
+func validateWSStep(p string, st *Step) []error {
+	var errs []error
+	add := func(path, format string, args ...any) {
+		errs = append(errs, &FieldError{Path: path, Msg: fmt.Sprintf(format, args...)})
+	}
+
+	if st.Method != "" {
+		add(p+".method", "not allowed on ws steps")
+	}
+	if st.Body != "" {
+		add(p+".body", "not allowed on ws steps; use ws.messages[].send")
+	}
+	if len(st.Assert) > 0 {
+		add(p+".assert", "not allowed on ws steps; use ws.messages[].expect")
+	}
+	lp := strings.ToLower(st.Path)
+	if !strings.HasPrefix(st.Path, "/") && !strings.HasPrefix(st.Path, "{{") &&
+		!strings.HasPrefix(lp, "ws://") && !strings.HasPrefix(lp, "wss://") {
+		add(p+".path", "must start with \"/\", a {{variable}}, ws:// or wss://, got %q", st.Path)
+	}
+	if st.ThinkTime.Duration < 0 {
+		add(p+".think_time", "must not be negative")
+	}
+	for k := range st.Headers {
+		if strings.TrimSpace(k) == "" {
+			add(p+".headers", "header name must not be empty")
+		}
+	}
+
+	ws := st.WS
+	if ws == nil {
+		add(p+".ws", "required for steps with type: ws")
+		return errs
+	}
+	wp := p + ".ws"
+	if ws.Hold.Duration < 0 {
+		add(wp+".hold", "must not be negative")
+	}
+	if ws.PingEvery.Duration < 0 {
+		add(wp+".ping_every", "must not be negative")
+	}
+	if ws.PingMessage != "" && ws.PingEvery.Duration == 0 {
+		add(wp+".ping_message", "requires ping_every")
+	}
+	if ws.PingEvery.Duration > 0 && ws.Hold.Duration == 0 {
+		add(wp+".ping_every", "has no effect without hold")
+	}
+	expects := 0
+	for j, m := range ws.Messages {
+		mp := fmt.Sprintf("%s.messages[%d]", wp, j)
+		if m.Send == "" && m.Expect == "" {
+			add(mp, "needs send, expect or both")
+		}
+		if m.Timeout.Duration < 0 {
+			add(mp+".timeout", "must not be negative")
+		}
+		if m.Timeout.Duration > 0 && m.Expect == "" {
+			add(mp+".timeout", "only applies together with expect")
+		}
+		if m.Expect != "" {
+			expects++
+		}
+	}
+
+	for j, ex := range st.Extract {
+		ep := fmt.Sprintf("%s.extract[%d]", p, j)
+		if strings.TrimSpace(ex.Var) == "" {
+			add(ep+".var", "must not be empty")
+		}
+		if ex.Expr == "" {
+			add(ep+".expr", "must not be empty")
+		}
+		switch ex.From {
+		case FromJSON:
+		case FromRegex:
+			if ex.Expr != "" {
+				if re, err := regexp.Compile(ex.Expr); err != nil {
+					add(ep+".expr", "invalid regex: %v", err)
+				} else if re.NumSubexp() < 1 {
+					add(ep+".expr", "regex must contain at least one capture group")
+				}
+			}
+		default:
+			add(ep+".from", "must be json or regex on ws steps; got %q", ex.From)
+		}
+	}
+	if len(st.Extract) > 0 && expects == 0 {
+		add(p+".extract", "ws extract reads the last expected message; add a ws.messages[].expect")
 	}
 	return errs
 }

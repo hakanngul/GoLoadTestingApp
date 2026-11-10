@@ -369,7 +369,10 @@ export function ScenarioFormView({
 
 function StepCard({ index, step, count, mutate }: { index: number; step: FormStep; count: number; mutate: Mutator }) {
   const m: (fn: (s: FormStep) => void) => void = (fn) => mutate((f) => fn(f.steps[index]));
-  const showBody = !['GET', 'HEAD'].includes(step.method) || step.body !== '';
+  const isWS = step.type === 'ws';
+  const showBody = !isWS && (!['GET', 'HEAD'].includes(step.method) || step.body !== '');
+  const pathOk = /^(\/|\{\{)/.test(step.path) || (isWS && /^wss?:\/\//i.test(step.path));
+  const extractSources = isWS ? EXTRACT_SOURCES.filter((x) => x !== 'header') : EXTRACT_SOURCES;
   const move = (d: number) =>
     mutate((f) => {
       const j = index + d;
@@ -388,7 +391,7 @@ function StepCard({ index, step, count, mutate }: { index: number; step: FormSte
           placeholder="step name"
           onChange={(e) => m((s) => void (s.name = e.target.value))}
         />
-        <span className={`method ${step.method}`}>{step.method}</span>
+        <span className={`method ${isWS ? 'WS' : step.method}`}>{isWS ? 'WS' : step.method}</span>
         <span className="mono muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {step.path}
         </span>
@@ -418,18 +421,33 @@ function StepCard({ index, step, count, mutate }: { index: number; step: FormSte
         <div className="form-grid">
           <div className="field span-2">
             <label>Method</label>
-            <select className="input mono" value={step.method} onChange={(e) => m((s) => void (s.method = e.target.value))}>
+            <select
+              className="input mono"
+              value={isWS ? 'WS' : step.method}
+              onChange={(e) =>
+                m((s) => {
+                  if (e.target.value === 'WS') {
+                    s.type = 'ws';
+                    s.method = '';
+                  } else {
+                    s.type = 'http';
+                    s.method = e.target.value;
+                  }
+                })
+              }
+            >
               {METHODS.map((x) => (
                 <option key={x}>{x}</option>
               ))}
+              <option value="WS">WS (WebSocket)</option>
             </select>
           </div>
           <div className="field span-8">
             <label>Path</label>
             <input
-              className={`input mono ${step.path.startsWith('/') || step.path.startsWith('{{') ? '' : 'invalid'}`}
+              className={`input mono ${pathOk ? '' : 'invalid'}`}
               value={step.path}
-              placeholder="/resource/{{id}}"
+              placeholder={isWS ? '/ws?token={{token}}' : '/resource/{{id}}'}
               onChange={(e) => m((s) => void (s.path = e.target.value))}
             />
           </div>
@@ -462,9 +480,11 @@ function StepCard({ index, step, count, mutate }: { index: number; step: FormSte
           </div>
         ) : null}
 
+        {isWS ? <WSBlock step={step} m={m} /> : null}
+
         <div className="sub-block">
           <div className="label">
-            Extract
+            {isWS ? 'Extract (from the last expected message)' : 'Extract'}
             <button
               className="btn sm ghost"
               onClick={() => m((s) => void s.extract.push({ var: '', from: 'json', expr: '' }))}
@@ -487,7 +507,7 @@ function StepCard({ index, step, count, mutate }: { index: number; step: FormSte
                 value={x.from}
                 onChange={(e) => m((s) => void (s.extract[j].from = e.target.value as ExtractSource))}
               >
-                {EXTRACT_SOURCES.map((o) => (
+                {extractSources.map((o) => (
                   <option key={o}>{o}</option>
                 ))}
               </select>
@@ -504,69 +524,146 @@ function StepCard({ index, step, count, mutate }: { index: number; step: FormSte
           ))}
         </div>
 
-        <div className="sub-block">
-          <div className="label">
-            Assertions
-            <button
-              className="btn sm ghost"
-              onClick={() => m((s) => void s.assert.push({ type: 'status', expr: '', op: 'eq', value: '200' }))}
-            >
-              <Icon name="plus" size={12} /> Add
-            </button>
-          </div>
-          {step.assert.map((a, j) => (
-            <div className="row" key={j} style={{ marginBottom: 6 }}>
-              <select
-                className="input"
-                style={{ flex: '0 0 130px' }}
-                value={a.type}
-                onChange={(e) =>
-                  m((s) => {
-                    const t = e.target.value as AssertType;
-                    s.assert[j].type = t;
-                    if (!ASSERT_OPS[t].includes(s.assert[j].op)) s.assert[j].op = ASSERT_OPS[t][0];
-                  })
-                }
+        {isWS ? null : (
+          <div className="sub-block">
+            <div className="label">
+              Assertions
+              <button
+                className="btn sm ghost"
+                onClick={() => m((s) => void s.assert.push({ type: 'status', expr: '', op: 'eq', value: '200' }))}
               >
-                {ASSERT_TYPES.map((o) => (
-                  <option key={o}>{o}</option>
-                ))}
-              </select>
-              {a.type === 'json' ? (
-                <input
-                  className="input mono"
-                  style={{ flex: '0 0 26%' }}
-                  placeholder="json path"
-                  value={a.expr}
-                  onChange={(e) => m((s) => void (s.assert[j].expr = e.target.value))}
-                />
-              ) : null}
-              <select
-                className="input"
-                style={{ flex: '0 0 96px' }}
-                value={a.op}
-                onChange={(e) => m((s) => void (s.assert[j].op = e.target.value))}
-              >
-                {!ASSERT_OPS[a.type].includes(a.op) && <option value={a.op}>{a.op}</option>}
-                {ASSERT_OPS[a.type].map((o) => (
-                  <option key={o} value={o}>
-                    {OP_SYMBOL[o]} {o}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="input mono"
-                placeholder={a.type === 'status' ? '200' : a.type === 'duration' ? '200ms' : 'value'}
-                value={a.value}
-                onChange={(e) => m((s) => void (s.assert[j].value = e.target.value))}
-              />
-              <button className="btn ghost icon sm" onClick={() => m((s) => void s.assert.splice(j, 1))} aria-label="Remove">
-                <Icon name="x" size={14} />
+                <Icon name="plus" size={12} /> Add
               </button>
             </div>
-          ))}
+            {step.assert.map((a, j) => (
+              <div className="row" key={j} style={{ marginBottom: 6 }}>
+                <select
+                  className="input"
+                  style={{ flex: '0 0 130px' }}
+                  value={a.type}
+                  onChange={(e) =>
+                    m((s) => {
+                      const t = e.target.value as AssertType;
+                      s.assert[j].type = t;
+                      if (!ASSERT_OPS[t].includes(s.assert[j].op)) s.assert[j].op = ASSERT_OPS[t][0];
+                    })
+                  }
+                >
+                  {ASSERT_TYPES.map((o) => (
+                    <option key={o}>{o}</option>
+                  ))}
+                </select>
+                {a.type === 'json' ? (
+                  <input
+                    className="input mono"
+                    style={{ flex: '0 0 26%' }}
+                    placeholder="json path"
+                    value={a.expr}
+                    onChange={(e) => m((s) => void (s.assert[j].expr = e.target.value))}
+                  />
+                ) : null}
+                <select
+                  className="input"
+                  style={{ flex: '0 0 96px' }}
+                  value={a.op}
+                  onChange={(e) => m((s) => void (s.assert[j].op = e.target.value))}
+                >
+                  {!ASSERT_OPS[a.type].includes(a.op) && <option value={a.op}>{a.op}</option>}
+                  {ASSERT_OPS[a.type].map((o) => (
+                    <option key={o} value={o}>
+                      {OP_SYMBOL[o]} {o}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="input mono"
+                  placeholder={a.type === 'status' ? '200' : a.type === 'duration' ? '200ms' : 'value'}
+                  value={a.value}
+                  onChange={(e) => m((s) => void (s.assert[j].value = e.target.value))}
+                />
+                <button className="btn ghost icon sm" onClick={() => m((s) => void s.assert.splice(j, 1))} aria-label="Remove">
+                  <Icon name="x" size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Settings of a WebSocket step: hold, pings and the message exchange. */
+function WSBlock({ step, m }: { step: FormStep; m: (fn: (s: FormStep) => void) => void }) {
+  const ws = step.ws;
+  return (
+    <div className="sub-block">
+      <div className="form-grid">
+        <div className="field span-3">
+          <label>Hold</label>
+          <input
+            className={`input mono ${durOk(ws.hold) ? '' : 'invalid'}`}
+            value={ws.hold}
+            placeholder="0s"
+            title="Keep the connection open this long after the messages (not counted as latency)"
+            onChange={(e) => m((s) => void (s.ws.hold = e.target.value))}
+          />
+        </div>
+        <div className="field span-3">
+          <label>Ping every</label>
+          <input
+            className={`input mono ${durOk(ws.ping_every) ? '' : 'invalid'}`}
+            value={ws.ping_every}
+            placeholder="off"
+            onChange={(e) => m((s) => void (s.ws.ping_every = e.target.value))}
+          />
+        </div>
+        <div className="field span-6">
+          <label>Ping message</label>
+          <input
+            className="input mono"
+            value={ws.ping_message}
+            placeholder="empty = protocol ping frame"
+            onChange={(e) => m((s) => void (s.ws.ping_message = e.target.value))}
+          />
         </div>
       </div>
+      <div className="label" style={{ marginTop: 8 }}>
+        Messages
+        <button
+          className="btn sm ghost"
+          onClick={() => m((s) => void s.ws.messages.push({ send: '', expect: '', timeout: '' }))}
+        >
+          <Icon name="plus" size={12} /> Add
+        </button>
+      </div>
+      {ws.messages.map((msg, j) => (
+        <div className="row" key={j} style={{ marginBottom: 6 }}>
+          <input
+            className="input mono"
+            placeholder='send, e.g. {"type":"join"}'
+            value={msg.send}
+            onChange={(e) => m((s) => void (s.ws.messages[j].send = e.target.value))}
+          />
+          <input
+            className="input mono"
+            style={{ flex: '0 0 26%' }}
+            placeholder="expect (substring)"
+            value={msg.expect}
+            onChange={(e) => m((s) => void (s.ws.messages[j].expect = e.target.value))}
+          />
+          <input
+            className={`input mono ${durOk(msg.timeout) ? '' : 'invalid'}`}
+            style={{ flex: '0 0 90px' }}
+            placeholder="timeout"
+            value={msg.timeout}
+            onChange={(e) => m((s) => void (s.ws.messages[j].timeout = e.target.value))}
+          />
+          <button className="btn ghost icon sm" onClick={() => m((s) => void s.ws.messages.splice(j, 1))} aria-label="Remove">
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

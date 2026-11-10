@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/HdrHistogram/hdrhistogram-go v1.4.0
+	github.com/coder/websocket v1.8.14
 	github.com/jackc/pgx/v5 v5.7.5
 	google.golang.org/grpc v1.72.0
 	google.golang.org/protobuf v1.36.6

@@ -15,7 +15,6 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol"
-	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/httpx"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 )
 
@@ -30,9 +29,9 @@ const storeTimeout = 10 * time.Second
 const maxSampleMessage = 1024
 
 // execute drives one run to completion and persists its outcome.
-func (m *Manager) execute(ctx context.Context, ar *activeRun, sc *scenario.Scenario, exec *httpx.Executor, feeder data.Feeder) {
+func (m *Manager) execute(ctx context.Context, ar *activeRun, sc *scenario.Scenario, exec protocol.Executor, closeExec func(), feeder data.Feeder) {
 	defer m.wg.Done()
-	defer exec.Close()
+	defer closeExec()
 	defer ar.cancel()
 
 	runID := ar.run.ID

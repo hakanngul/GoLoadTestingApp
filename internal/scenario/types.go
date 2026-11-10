@@ -65,17 +65,75 @@ type Data struct {
 	Mode DataMode `yaml:"mode,omitempty"`
 }
 
+// StepType selects the protocol a step speaks.
+type StepType string
+
+const (
+	// StepHTTP is a single HTTP request (the default when Type is empty).
+	StepHTTP StepType = "http"
+	// StepWS opens a WebSocket connection, exchanges Step.WS.Messages and
+	// optionally holds the connection open (see WSStep).
+	StepWS StepType = "ws"
+)
+
 // Step is one request in an iteration. Path, header values and Body may
 // contain {{var}} placeholders (see Render).
+//
+// Type is optional and empty means http, so scenarios written before
+// WebSocket support parse unchanged. HTTP and WebSocket steps may be mixed
+// in one scenario; variables extracted by earlier steps are visible to
+// later ones (e.g. log in over HTTP, then open a WebSocket with the token).
 type Step struct {
 	Name      string            `yaml:"name"`
-	Method    string            `yaml:"method"` // default GET
+	Type      StepType          `yaml:"type,omitempty"` // http (default) or ws
+	Method    string            `yaml:"method"`         // default GET; must be empty for ws
 	Path      string            `yaml:"path"`
 	Headers   map[string]string `yaml:"headers,omitempty"`
 	Body      string            `yaml:"body,omitempty"`
 	ThinkTime Duration          `yaml:"think_time,omitempty"` // sleep after the step
 	Extract   []Extract         `yaml:"extract,omitempty"`
-	Assert    []Assert          `yaml:"assert,omitempty"`
+	Assert    []Assert          `yaml:"assert,omitempty"` // http only
+	// WS configures a ws step; required iff Type is ws.
+	WS *WSStep `yaml:"ws,omitempty"`
+}
+
+// IsWS reports whether the step is a WebSocket step.
+func (s *Step) IsWS() bool { return s.Type == StepWS }
+
+// WSStep configures a WebSocket step (Step.Type == "ws").
+//
+// The connection URL is Step.Path resolved against Target.BaseURL with the
+// scheme mapped http->ws and https->wss; an absolute ws:// or wss:// Path
+// is used as is. Target and step headers are sent with the handshake.
+//
+// After the handshake, Messages are processed in order; then the
+// connection is held open for Hold (sending PingMessage every PingEvery)
+// and closed normally. Extract on a ws step reads (json or regex) from the
+// last message that satisfied an Expect.
+type WSStep struct {
+	// Hold keeps the connection open this long after the message exchange.
+	// 0 closes it right after the exchange. Holding time is not latency.
+	Hold Duration `yaml:"hold,omitempty"`
+	// Messages are sent/awaited in order once after connecting.
+	Messages []WSMessage `yaml:"messages,omitempty"`
+	// PingEvery, if > 0, sends PingMessage periodically while holding.
+	PingEvery Duration `yaml:"ping_every,omitempty"`
+	// PingMessage is the text message sent every PingEvery. Empty means a
+	// WebSocket protocol ping control frame (which must be answered with a
+	// pong within the target timeout).
+	PingMessage string `yaml:"ping_message,omitempty"`
+}
+
+// WSMessage is one exchange: send a text message and/or wait for a
+// received message containing Expect. Send, Expect and PingMessage may
+// contain {{var}} placeholders.
+type WSMessage struct {
+	Send string `yaml:"send,omitempty"`
+	// Expect, if set, waits for a received message (text or binary)
+	// containing this substring; non-matching messages are skipped.
+	Expect string `yaml:"expect,omitempty"`
+	// Timeout bounds the wait for Expect. Default: Target.Timeout.
+	Timeout Duration `yaml:"timeout,omitempty"`
 }
 
 // ExtractSource is where an extracted value comes from.

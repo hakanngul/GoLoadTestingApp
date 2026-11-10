@@ -17,7 +17,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
 	"github.com/hakanngul/GoLoadTestingApp/internal/data"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
-	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/httpx"
+	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/executor"
 	"github.com/hakanngul/GoLoadTestingApp/internal/provision"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
@@ -220,14 +220,14 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 	if err != nil {
 		return model.Run{}, err
 	}
-	exec, err := httpx.New(sc, httpx.Options{})
+	exec, closeExec, err := executor.New(sc, executor.Options{})
 	if err != nil {
 		return model.Run{}, &ValidationError{Details: []string{err.Error()}}
 	}
 
 	status := model.RunRunning
 	if plan != nil {
-		exec.Close()
+		closeExec()
 		if plan.files, _, err = m.dataFiles(ctx, test, sc); err != nil {
 			return model.Run{}, err
 		}
@@ -249,7 +249,7 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 	})
 	if err != nil {
 		if plan == nil {
-			exec.Close()
+			closeExec()
 		}
 		return model.Run{}, fmt.Errorf("runner: create run: %w", err)
 	}
@@ -273,7 +273,7 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 		m.mu.Unlock()
 		cancel()
 		if plan == nil {
-			exec.Close()
+			closeExec()
 		}
 		run.Status = model.RunError
 		run.Error = "server shutting down"
@@ -289,7 +289,7 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 	if plan != nil {
 		go m.executeRemote(runCtx, ar, sc, test.YAML, plan)
 	} else {
-		go m.execute(runCtx, ar, sc, exec, feeder)
+		go m.execute(runCtx, ar, sc, exec, closeExec, feeder)
 	}
 	return run, nil
 }

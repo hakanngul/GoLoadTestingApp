@@ -15,6 +15,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/data"
 	"github.com/hakanngul/GoLoadTestingApp/internal/engine"
 	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
+	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/executor"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/httpx"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 )
@@ -51,12 +52,12 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	exec, err := httpx.New(sc, httpx.Options{MaxConnsPerHost: *maxConns})
+	exec, closeExec, err := executor.New(sc, executor.Options{HTTP: httpx.Options{MaxConnsPerHost: *maxConns}})
 	if err != nil {
 		fmt.Fprintf(stderr, "executor: %v\n", err)
 		return exitUsage
 	}
-	defer exec.Close()
+	defer closeExec()
 
 	start := time.Now()
 	col := metrics.NewCollector(start)
