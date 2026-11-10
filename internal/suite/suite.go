@@ -11,6 +11,9 @@
 //     StopOnFailure a test that does not pass skips the rest. Parallel:
 //     every test starts at once (they share the load generator's CPU and
 //     network; prefer workers or sequential for clean numbers).
+//   - An item may override the test's load (model.LoadOverride, same
+//     semantics as schedules): the override is applied to a copy of the
+//     scenario when the item starts and noted on the run.
 //   - A test that was deleted, or that cannot start (invalid scenario,
 //     target not allowed, not enough workers), is recorded as an item
 //     error; the suite carries on (unless StopOnFailure).
@@ -36,6 +39,7 @@ import (
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
+	"github.com/hakanngul/GoLoadTestingApp/internal/scheduler"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
 )
 
@@ -251,13 +255,22 @@ func (s *Service) prepare(ctx context.Context, req model.SuiteRequest) (model.Su
 		if it.Workers < 0 || it.Workers > MaxItemWorkers {
 			det = append(det, fmt.Sprintf("items[%d].workers: must be between 0 and %d", i, MaxItemWorkers))
 		}
-		if _, err := s.st.GetTest(ctx, it.TestID); err != nil {
-			if !errors.Is(err, store.ErrNotFound) {
-				return model.Suite{}, err
-			}
+		test, err := s.st.GetTest(ctx, it.TestID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
 			det = append(det, fmt.Sprintf("items[%d].test_id: test not found", i))
+		case err != nil:
+			return model.Suite{}, err
 		}
-		items = append(items, model.SuiteItem{TestID: it.TestID, Workers: it.Workers})
+		var load *model.LoadOverride
+		if it.Load != nil {
+			l := *it.Load
+			load = &l
+			for _, d := range scheduler.CheckLoad(load, test.YAML) {
+				det = append(det, fmt.Sprintf("items[%d].%s", i, d))
+			}
+		}
+		items = append(items, model.SuiteItem{TestID: it.TestID, Workers: it.Workers, Load: load})
 	}
 	if len(det) > 0 {
 		return model.Suite{}, &ValidationError{Details: det}
@@ -348,7 +361,7 @@ func (s *Service) Start(ctx context.Context, id string, req model.StartSuiteRequ
 		Items: make([]model.SuiteRunItem, 0, len(su.Items))}
 	for _, it := range su.Items {
 		run.Items = append(run.Items, model.SuiteRunItem{TestID: it.TestID, TestName: it.TestName,
-			Workers: it.Workers, Status: model.SuiteItemPending})
+			Workers: it.Workers, Load: it.Load, Status: model.SuiteItemPending})
 	}
 
 	// Claim the suite before creating the record so two concurrent starts
@@ -549,17 +562,16 @@ func (s *Service) runItem(ctx context.Context, a *activeRun, i int) {
 	}
 	a.mu.Lock()
 	item := a.run.Items[i]
-	label := a.run.Label
+	label, suiteName := a.run.Label, a.run.SuiteName
 	a.mu.Unlock()
 
 	sctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 	test, err := s.st.GetTest(sctx, item.TestID)
-	if err == nil {
-		var run model.Run
-		run, err = s.runner.Start(sctx, test, model.StartRunRequest{Workers: item.Workers, Label: label})
-		item.RunID, item.Status = run.ID, string(run.Status)
-	} else if errors.Is(err, store.ErrNotFound) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		err = errors.New("test was deleted")
+	case err == nil:
+		err = s.startItem(sctx, &item, test, label, suiteName)
 	}
 	cancel()
 	start := s.now()
@@ -585,6 +597,27 @@ func (s *Service) runItem(ctx context.Context, a *activeRun, i int) {
 	a.mu.Lock()
 	delete(a.current, item.RunID)
 	a.mu.Unlock()
+}
+
+// startItem starts the run of one item (with its load override applied
+// to a copy of the scenario) and fills item.RunID and item.Status.
+func (s *Service) startItem(ctx context.Context, item *model.SuiteRunItem, test model.Test, label, suiteName string) error {
+	req := model.StartRunRequest{Workers: item.Workers, Label: label}
+	if item.Load != nil {
+		y, err := scheduler.ApplyLoad(test.YAML, item.Load)
+		if err != nil {
+			return fmt.Errorf("load override: %w", err)
+		}
+		test.YAML = y
+		req.Notes = fmt.Sprintf("Started by suite %q with a load override: %s (the saved test's load was not used).",
+			suiteName, scheduler.DescribeLoad(item.Load))
+	}
+	run, err := s.runner.Start(ctx, test, req)
+	if err != nil {
+		return err
+	}
+	item.RunID, item.Status = run.ID, string(run.Status)
+	return nil
 }
 
 // wait polls the item's run until it finishes and copies its outcome.

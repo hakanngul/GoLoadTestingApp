@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -60,6 +61,44 @@ func validateLoad(l *model.LoadOverride) []string {
 		add("load: ramp_up_ms, hold_ms and ramp_down_ms only apply to mode profile")
 	}
 	return details
+}
+
+// CheckLoad validates a load override on its own and, when testYAML is
+// not empty, against that scenario (e.g. users on an open-model test).
+// It returns "path: message" details (paths start with "load"); nil = ok.
+func CheckLoad(l *model.LoadOverride, testYAML string) []string {
+	details := validateLoad(l)
+	if len(details) > 0 || l == nil || testYAML == "" {
+		return details
+	}
+	if _, err := ApplyLoad(testYAML, l); err != nil {
+		var ve *ValidationError
+		if errors.As(err, &ve) {
+			return ve.Details
+		}
+		return []string{fmt.Sprintf("load: %v", err)}
+	}
+	return nil
+}
+
+// DescribeLoad is a short human description of a load override
+// ("50 VUs, ramp 30s, hold 5m0s"); "" for nil.
+func DescribeLoad(l *model.LoadOverride) string {
+	if l == nil {
+		return ""
+	}
+	peak := fmt.Sprintf("%d it/s", l.Rate)
+	if l.Users > 0 {
+		peak = fmt.Sprintf("%d VUs", l.Users)
+	}
+	if l.Mode == model.LoadScale {
+		return "peak " + peak + " (scaled)"
+	}
+	out := fmt.Sprintf("%s, ramp %s, hold %s", peak, msDuration(l.RampUpMs), msDuration(l.HoldMs))
+	if l.RampDownMs > 0 {
+		out += fmt.Sprintf(", down %s", msDuration(l.RampDownMs))
+	}
+	return out
 }
 
 // ApplyLoad returns the scenario YAML src with the load override l

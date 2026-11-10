@@ -23,9 +23,10 @@ func testSuiteCRUD(t *testing.T, s Store) {
 	a := mustTest(t, s, "suite-a")
 	b := mustTest(t, s, "suite-b")
 
+	load := &model.LoadOverride{Mode: model.LoadProfile, Users: 50, RampUpMs: 30000, HoldMs: 600000}
 	in := model.Suite{ID: "ignored", Name: "smoke", Description: "d", Mode: model.SuiteSequential,
 		StopOnFailure: true, GapMs: 5000,
-		Items: []model.SuiteItem{{TestID: a.ID, TestName: "ignored", Workers: 2}, {TestID: b.ID}, {TestID: a.ID}}}
+		Items: []model.SuiteItem{{TestID: a.ID, TestName: "ignored", Workers: 2}, {TestID: b.ID, Load: load}, {TestID: a.ID}}}
 	got, err := ss.CreateSuite(c, in)
 	if err != nil {
 		t.Fatalf("CreateSuite: %v", err)
@@ -33,7 +34,7 @@ func testSuiteCRUD(t *testing.T, s Store) {
 	if !isUUID(got.ID) || !got.CreatedAt.Equal(got.UpdatedAt) {
 		t.Fatalf("created = %+v", got)
 	}
-	want := []model.SuiteItem{{TestID: a.ID, Workers: 2}, {TestID: b.ID}, {TestID: a.ID}}
+	want := []model.SuiteItem{{TestID: a.ID, Workers: 2}, {TestID: b.ID, Load: load}, {TestID: a.ID}}
 	jsonEq(t, "items", got.Items, want)
 	if got.Name != "smoke" || got.Description != "d" || got.Mode != model.SuiteSequential ||
 		!got.StopOnFailure || got.GapMs != 5000 {

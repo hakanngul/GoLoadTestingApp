@@ -3630,3 +3630,34 @@ tr.focus-row td {
     grid-template-columns: 1fr;
   }
 }
+.suite-load {
+  flex-basis: 100%;
+  margin: 4px 0 2px 30px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+}
+.load-btn {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.load-btn.on {
+  border-color: var(--accent, #2b7de9);
+  color: var(--accent, #2b7de9);
+}
+.load-btn.invalid {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.suite-load-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 6px;
+  color: var(--accent, #2b7de9);
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}

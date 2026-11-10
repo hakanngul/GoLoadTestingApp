@@ -39,7 +39,7 @@ func (f *fakeRunner) Start(ctx context.Context, t model.Test, req model.StartRun
 		return model.Run{}, err
 	}
 	run, err := f.st.CreateRun(ctx, model.Run{TestID: t.ID, TestName: t.Name, Status: model.RunRunning,
-		StartedAt: time.Now(), Label: req.Label, Workers: req.Workers})
+		StartedAt: time.Now(), Label: req.Label, Notes: req.Notes, Workers: req.Workers, YAML: t.YAML})
 	if err != nil {
 		return model.Run{}, err
 	}
@@ -362,5 +362,64 @@ func TestShutdown(t *testing.T) {
 	}
 	if _, err := f.svc.Start(context.Background(), su.ID, model.StartSuiteRequest{}); !errors.Is(err, ErrShuttingDown) {
 		t.Fatalf("start after shutdown: %v", err)
+	}
+}
+
+const closedYAML = `
+name: t
+target:
+  base_url: https://api.example.test
+load:
+  model: closed
+  stages:
+    - {duration: 10s, target: 5}
+steps:
+  - path: /health
+`
+
+func TestItemLoadOverride(t *testing.T) {
+	f := newFixture(t, 5*time.Millisecond)
+	ctx := context.Background()
+	tt, err := f.st.CreateTest(ctx, model.Test{Name: "home", YAML: closedYAML})
+	if err != nil {
+		t.Fatal(err)
+	}
+	over := &model.LoadOverride{Mode: model.LoadProfile, Users: 50, RampUpMs: 2000, HoldMs: 5000}
+
+	// Invalid overrides are reported per item.
+	_, err = f.svc.Create(ctx, model.SuiteRequest{Name: "bad", Items: []model.SuiteItem{
+		{TestID: tt.ID}, {TestID: tt.ID, Load: &model.LoadOverride{Mode: model.LoadScale, Rate: 10}}}})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || len(ve.Details) != 1 || !strings.HasPrefix(ve.Details[0], "items[1].load") {
+		t.Fatalf("bad override: %v", err)
+	}
+
+	su, err := f.svc.Create(ctx, model.SuiteRequest{Name: "steps", Items: []model.SuiteItem{
+		{TestID: tt.ID}, {TestID: tt.ID, Load: over}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if su.Items[0].Load != nil || su.Items[1].Load == nil || su.Items[1].Load.Users != 50 {
+		t.Fatalf("items = %+v", su.Items)
+	}
+	r, err := f.svc.Start(ctx, su.ID, model.StartSuiteRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.waitDone(t, r.ID)
+	if got.Status != model.RunPassed || got.Items[1].Load == nil {
+		t.Fatalf("final = %+v", got)
+	}
+	plain, _ := f.st.GetRun(ctx, got.Items[0].RunID)
+	loaded, _ := f.st.GetRun(ctx, got.Items[1].RunID)
+	if plain.YAML != closedYAML || plain.Notes != "" {
+		t.Fatalf("item without override changed the scenario: %q / %q", plain.YAML, plain.Notes)
+	}
+	if loaded.YAML == closedYAML || !strings.Contains(loaded.YAML, "target: 50") ||
+		!strings.Contains(loaded.Notes, "load override: 50 VUs, ramp 2s, hold 5s") {
+		t.Fatalf("override run yaml=%q notes=%q", loaded.YAML, loaded.Notes)
+	}
+	if cur, _ := f.st.GetTest(ctx, tt.ID); cur.YAML != closedYAML {
+		t.Fatal("saved test was modified")
 	}
 }
