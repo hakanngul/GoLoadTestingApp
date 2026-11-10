@@ -157,8 +157,13 @@ func (m *Manager) finalRun(ar *activeRun, sc *scenario.Scenario, sum metrics.Sum
 // emitPoint converts one interval snapshot into a MetricPoint, stores it
 // with its encoded histograms and publishes it to subscribers.
 func (m *Manager) emitPoint(ar *activeRun, snap *metrics.Snapshot, elapsed time.Duration, eng *engine.Engine, cpu float64) {
-	sum := metrics.Summarize(snap)
 	target, active := eng.Current()
+	m.emit(ar, snap, elapsed, target, active, cpu, 1)
+}
+
+// emit stores and publishes one per-second point (local or merged remote).
+func (m *Manager) emit(ar *activeRun, snap *metrics.Snapshot, elapsed time.Duration, target float64, active int64, cpu float64, workers int) {
+	sum := metrics.Summarize(snap)
 	p := model.MetricPoint{
 		T:          m.now(),
 		Elapsed:    elapsed.Seconds(),
@@ -175,7 +180,7 @@ func (m *Manager) emitPoint(ar *activeRun, snap *metrics.Snapshot, elapsed time.
 		P99Ms:      ms(sum.P99),
 		MaxMs:      ms(sum.Max),
 		CPU:        cpu,
-		Workers:    1,
+		Workers:    workers,
 	}
 	runID := ar.run.ID // ID never changes after Start
 	blob, err := snap.MarshalBinary()

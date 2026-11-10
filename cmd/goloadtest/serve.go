@@ -8,13 +8,19 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/hakanngul/GoLoadTestingApp/internal/api"
+	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
+	"github.com/hakanngul/GoLoadTestingApp/internal/provision"
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
 	"github.com/hakanngul/GoLoadTestingApp/web"
@@ -29,6 +35,8 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	db := flags.String("db", envOr("GOLOAD_DB", "memory"), `Postgres DSN, or "memory" for a throwaway in-memory store`)
 	token := flags.String("token", os.Getenv("GOLOAD_TOKEN"), "require this bearer token on /api (empty = no auth)")
 	devCORS := flags.Bool("dev-cors", false, "allow the Vite dev server (localhost:5173) to call the API")
+	grpcAddr := flags.String("grpc-addr", envOr("GOLOAD_GRPC_ADDR", ":9090"), `gRPC listen address for workers ("" disables distributed mode)`)
+	workerToken := flags.String("worker-token", os.Getenv("GOLOAD_WORKER_TOKEN"), "token workers must present (required when -grpc-addr is set)")
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -49,7 +57,41 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		log.Info("marked interrupted runs", "count", n)
 	}
 
-	mgr := runner.NewManager(runner.Options{Store: st, Version: version, Logger: log})
+	ropts := runner.Options{Store: st, Version: version, Logger: log}
+	if *grpcAddr != "" {
+		if *workerToken == "" {
+			fmt.Fprintln(stderr, "serve: -worker-token (or GOLOAD_WORKER_TOKEN) is required with -grpc-addr; use -grpc-addr \"\" for single-node mode")
+			return exitUsage
+		}
+		master := cluster.NewMaster(cluster.MasterOptions{Token: *workerToken, Logger: log})
+		gs := grpc.NewServer()
+		master.Register(gs)
+		lis, err := net.Listen("tcp", *grpcAddr)
+		if err != nil {
+			fmt.Fprintf(stderr, "grpc listen: %v\n", err)
+			return exitUsage
+		}
+		go func() {
+			if err := gs.Serve(lis); err != nil {
+				log.Error("grpc serve", "error", err)
+			}
+		}()
+		defer gs.GracefulStop()
+		ropts.Dispatcher = master
+		ropts.WorkerToken = *workerToken
+		ropts.MasterAddr = os.Getenv("GOLOAD_MASTER_ADVERTISE_ADDR")
+		prov, err := provisionerFromEnv(ctx, log)
+		if err != nil {
+			fmt.Fprintf(stderr, "provisioner: %v\n", err)
+			return exitUsage
+		}
+		if prov != nil {
+			ropts.Provisioner = prov
+			go reapStaleWorkers(ctx, prov, log)
+		}
+		fmt.Fprintf(stdout, "worker coordinator listening on %s\n", *grpcAddr)
+	}
+	mgr := runner.NewManager(ropts)
 
 	ui, err := fs.Sub(web.Dist, "dist")
 	if err != nil {
@@ -104,10 +146,65 @@ func storeKind(dsn string) string {
 	return "postgres"
 }
 
-
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return def
+}
+
+// provisionerFromEnv builds the worker provisioner configured through
+// GOLOAD_PROVISIONER (none | aws) and the GOLOAD_AWS_* variables.
+func provisionerFromEnv(ctx context.Context, log *slog.Logger) (*provision.AWS, error) {
+	switch v := envOr("GOLOAD_PROVISIONER", "none"); v {
+	case "none":
+		return nil, nil
+	case "aws":
+		if os.Getenv("GOLOAD_MASTER_ADVERTISE_ADDR") == "" {
+			return nil, fmt.Errorf("GOLOAD_MASTER_ADVERTISE_ADDR is required with GOLOAD_PROVISIONER=aws")
+		}
+		return provision.NewAWS(ctx, provision.AWSConfig{
+			Region:           os.Getenv("GOLOAD_AWS_REGION"),
+			LaunchTemplateID: os.Getenv("GOLOAD_AWS_LAUNCH_TEMPLATE_ID"),
+			SubnetIDs:        splitList(os.Getenv("GOLOAD_AWS_SUBNET_IDS")),
+			InstanceTypes:    splitList(os.Getenv("GOLOAD_AWS_INSTANCE_TYPES")),
+			MaxPrice:         os.Getenv("GOLOAD_AWS_MAX_PRICE"),
+			SpotOnly:         os.Getenv("GOLOAD_AWS_SPOT_ONLY") == "true",
+			WorkerImage:      os.Getenv("GOLOAD_WORKER_IMAGE"),
+			Logger:           log,
+		})
+	default:
+		return nil, fmt.Errorf("unknown GOLOAD_PROVISIONER %q (want none or aws)", v)
+	}
+}
+
+// reapStaleWorkers terminates orphaned workers (e.g. left behind by a
+// master crash) every 10 minutes. Workers older than the default 6h
+// lifetime cap are considered stale.
+func reapStaleWorkers(ctx context.Context, p *provision.AWS, log *slog.Logger) {
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			ids, err := p.TerminateStale(ctx, 6*time.Hour)
+			if err != nil {
+				log.Warn("terminate stale workers", "error", err)
+			} else if len(ids) > 0 {
+				log.Info("terminated stale workers", "count", len(ids))
+			}
+		}
+	}
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

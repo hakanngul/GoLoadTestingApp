@@ -14,9 +14,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
 	"github.com/hakanngul/GoLoadTestingApp/internal/data"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol/httpx"
+	"github.com/hakanngul/GoLoadTestingApp/internal/provision"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
 )
@@ -88,6 +90,19 @@ type Options struct {
 	// Logger receives store write failures and other non-fatal problems.
 	// nil means slog.Default().
 	Logger *slog.Logger
+
+	// Dispatcher runs tests on remote workers (Phase 4). nil = local only.
+	Dispatcher cluster.Dispatcher
+	// Provisioner launches workers on demand when too few are idle (e.g.
+	// AWS spot). nil = never launch; use connected workers only.
+	Provisioner provision.Provisioner
+	// MasterAddr is the gRPC address launched workers dial.
+	MasterAddr string
+	// WorkerToken authenticates launched workers.
+	WorkerToken string
+	// ProvisionTimeout bounds waiting for launched workers to connect.
+	// 0 means DefaultProvisionTimeout.
+	ProvisionTimeout time.Duration
 }
 
 // Manager runs tests in-process. It implements Runner and is safe for
@@ -102,6 +117,12 @@ type Manager struct {
 	log        *slog.Logger
 	subBuffer  int // per-subscriber channel capacity (tests shrink it)
 	cpuBits    atomic.Uint64
+
+	dispatcher       cluster.Dispatcher
+	provisioner      provision.Provisioner
+	masterAddr       string
+	workerToken      string
+	provisionTimeout time.Duration
 
 	mu     sync.Mutex
 	runs   map[string]*activeRun
@@ -122,6 +143,15 @@ func NewManager(opts Options) *Manager {
 		log:        opts.Logger,
 		subBuffer:  defaultSubscriberBuffer,
 		runs:       make(map[string]*activeRun),
+
+		dispatcher:       opts.Dispatcher,
+		provisioner:      opts.Provisioner,
+		masterAddr:       opts.MasterAddr,
+		workerToken:      opts.WorkerToken,
+		provisionTimeout: opts.ProvisionTimeout,
+	}
+	if m.provisionTimeout <= 0 {
+		m.provisionTimeout = DefaultProvisionTimeout
 	}
 	switch {
 	case m.maxSamples == 0:
@@ -146,7 +176,9 @@ func NewManager(opts Options) *Manager {
 //     attached to the test or is not valid CSV, or a negative worker count;
 //   - an error wrapping ErrTargetNotAllowed when Options.Allow rejects the
 //     target;
-//   - ErrDistributedUnavailable when req.Workers > 1;
+//   - ErrDistributedUnavailable when req.Workers > 1 and no Dispatcher
+//     is configured; cluster.ErrNotEnoughWorkers when too few workers are
+//     idle and no Provisioner can launch more;
 //   - ErrShuttingDown after Shutdown;
 //   - store errors (wrapped).
 //
@@ -174,10 +206,14 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 		return model.Run{}, &ValidationError{Details: []string{"workers: must not be negative"}}
 	case workers == 0:
 		workers = 1
-	case workers > 1:
-		return model.Run{}, ErrDistributedUnavailable
+	}
+	plan, err := m.planRemote(workers)
+	if err != nil {
+		return model.Run{}, err
 	}
 
+	// Building the feeder and executor validates the data file and the
+	// steps up front, also for remote runs (workers repeat it).
 	feeder, err := m.loadFeeder(ctx, test, sc)
 	if err != nil {
 		return model.Run{}, err
@@ -187,10 +223,22 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 		return model.Run{}, &ValidationError{Details: []string{err.Error()}}
 	}
 
+	status := model.RunRunning
+	if plan != nil {
+		exec.Close()
+		if plan.files, _, err = m.dataFiles(ctx, test, sc); err != nil {
+			return model.Run{}, err
+		}
+		workers = plan.n
+		if plan.provision > 0 {
+			status = model.RunQueued
+		}
+	}
+
 	run, err := m.store.CreateRun(ctx, model.Run{
 		TestID:     test.ID,
 		TestName:   test.Name,
-		Status:     model.RunRunning,
+		Status:     status,
 		YAML:       test.YAML,
 		Workers:    workers,
 		StartedAt:  m.now(),
@@ -198,7 +246,9 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 		Warnings:   []string{},
 	})
 	if err != nil {
-		exec.Close()
+		if plan == nil {
+			exec.Close()
+		}
 		return model.Run{}, fmt.Errorf("runner: create run: %w", err)
 	}
 	if run.Thresholds == nil {
@@ -211,6 +261,7 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 	runCtx, cancel := context.WithCancel(context.Background())
 	ar := &activeRun{
 		cancel: cancel,
+		remote: plan != nil,
 		run:    run,
 		subs:   make(map[*subscriber]struct{}),
 	}
@@ -219,7 +270,9 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 	if m.closed {
 		m.mu.Unlock()
 		cancel()
-		exec.Close()
+		if plan == nil {
+			exec.Close()
+		}
 		run.Status = model.RunError
 		run.Error = "server shutting down"
 		fin := m.now()
@@ -231,7 +284,11 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 	m.wg.Add(1)
 	m.mu.Unlock()
 
-	go m.execute(runCtx, ar, sc, exec, feeder)
+	if plan != nil {
+		go m.executeRemote(runCtx, ar, sc, test.YAML, plan)
+	} else {
+		go m.execute(runCtx, ar, sc, exec, feeder)
+	}
 	return run, nil
 }
 
@@ -337,7 +394,7 @@ func (m *Manager) Workers() []model.Worker {
 	var latest time.Time
 	for id, ar := range m.runs {
 		ar.mu.Lock()
-		if !ar.finished {
+		if !ar.finished && !ar.remote {
 			w.State = "busy"
 			if w.RunID == "" || ar.run.StartedAt.After(latest) {
 				w.RunID, latest = id, ar.run.StartedAt
@@ -346,8 +403,14 @@ func (m *Manager) Workers() []model.Worker {
 		ar.mu.Unlock()
 	}
 	m.mu.Unlock()
-	return []model.Worker{w}
+	out := []model.Worker{w}
+	if m.dispatcher != nil {
+		out = append(out, m.dispatcher.Workers()...)
+	}
+	return out
 }
+
+func baseName(p string) string { return filepath.Base(p) }
 
 // Shutdown rejects new runs, stops every active run gracefully (they end
 // with status stopped and are persisted) and waits for them to finish or

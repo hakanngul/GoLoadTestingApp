@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
@@ -77,6 +78,8 @@ func (s *server) writeErr(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusForbidden, "target not allowed", err.Error())
 	case errors.Is(err, runner.ErrDistributedUnavailable):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, cluster.ErrNotEnoughWorkers):
+		writeError(w, http.StatusConflict, "not enough idle workers", err.Error())
 	case errors.Is(err, runner.ErrShuttingDown):
 		writeError(w, http.StatusServiceUnavailable, "server is shutting down")
 	case errors.As(err, &vd):

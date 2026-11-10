@@ -11,6 +11,7 @@ import (
 // of its goroutine.
 type activeRun struct {
 	cancel context.CancelFunc // cancels the engine context
+	remote bool               // executes on remote workers, not in-process
 
 	mu       sync.Mutex
 	run      model.Run // latest known record
@@ -102,4 +103,20 @@ func (ar *activeRun) finish(final model.Run) {
 		close(sub.ch)
 		delete(ar.subs, sub)
 	}
+}
+
+// setRun replaces the latest known record (e.g. queued -> running) and
+// publishes it as an EventStatus.
+func (ar *activeRun) setRun(r model.Run) {
+	ar.mu.Lock()
+	ar.run = r
+	ar.mu.Unlock()
+	ar.publish(Event{Type: EventStatus, Run: &r})
+}
+
+// snapshot returns the latest known record.
+func (ar *activeRun) snapshot() model.Run {
+	ar.mu.Lock()
+	defer ar.mu.Unlock()
+	return ar.run
 }
