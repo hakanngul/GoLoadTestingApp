@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { api, subscribeRun } from '../api/client';
-import { isFinished, type MetricPoint, type Run, type Summary } from '../api/types';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { api, download, errorText, exportUrls, subscribeRun } from '../api/client';
+import { isFinished, type Comparison, type MetricPoint, type Run, type Summary } from '../api/types';
 import { RunCharts } from '../components/charts';
+import { BaselineBadge, DeltaText, Menu, MetricDeltaTable, OverallBadge, RunLabel, WindowControl } from '../components/report';
 import { ConfirmDialog, ErrorAlert, Icon, Kpi, Loading, Modal, StatusBadge } from '../components/ui';
 import {
   fmtClock,
@@ -20,6 +21,16 @@ import {
 import { useAsync, useNow } from '../lib/hooks';
 import { OP_SYMBOL, summarizeYaml, unitFor } from '../lib/scenario';
 import { remoteWorkers } from '../lib/workers';
+import {
+  customWindow,
+  findDelta,
+  overallVerdict,
+  parseWindow,
+  regressionText,
+  windowLabel,
+  windowParams,
+  type WindowSel,
+} from '../lib/report';
 
 export function RunPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -58,6 +69,7 @@ function RunHeader({ run, children }: { run: Run; children?: ReactNode }) {
             {run.test_name}
           </Link>
           <StatusBadge status={run.status} />
+          <RunLabel label={run.label} size="lg" />
         </h1>
       </div>
       <span className="spacer" />
@@ -354,28 +366,140 @@ function thresholdActual(metric: string, v: number): string {
   return fmtMs(v);
 }
 
-export function ResultView({ run }: { run: Run }) {
+export function ResultView({ run: initialRun }: { run: Run }) {
   const nav = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const [run, setRun] = useState(initialRun);
+  useEffect(() => setRun(initialRun), [initialRun]);
+  const win = parseWindow(params);
+  const winKey = windowParams(win).toString();
+  const report = useAsync(() => api.runReport(run.id, win), [run.id, winKey]);
+  const test = useAsync(() => api.getTest(run.test_id), [run.test_id]);
   const metrics = useAsync(() => api.runMetrics(run.id), [run.id]);
   const errors = useAsync(() => api.runErrors(run.id), [run.id]);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [delBusy, setDelBusy] = useState(false);
+  const [delErr, setDelErr] = useState<unknown>(null);
+  const [toast, setToast] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [baselineBusy, setBaselineBusy] = useState(false);
   const sum = useMemo(() => summarizeYaml(run.yaml), [run.yaml]);
   const unit = sum ? unitFor(sum.model) : 'it/s';
-  const s = run.summary;
+  const rep = report.data && report.data.run.id === run.id ? report.data : undefined;
+  // Until the windowed report arrives (or if it is unavailable) show the whole-run summary.
+  const s = rep?.summary ?? run.summary;
   const b = bannerInfo[run.status] ?? bannerInfo.error;
   const dur = runDurationS(run.started_at, run.finished_at);
-  const thresholds = run.thresholds ?? [];
+  const thresholds = (rep ? rep.thresholds : run.thresholds) ?? [];
   const failedCount = thresholds.filter((t) => !t.passed).length;
+  const winText = rep ? windowLabel(rep.window) : windowLabel(win);
+  const cmp = rep?.baseline;
+  const baselineId = test.data?.baseline_run_id ?? '';
+  const isBaseline = baselineId === run.id;
+  const hasResults = !!run.summary;
+
+  useEffect(() => {
+    if (!toast) return;
+    const h = window.setTimeout(() => setToast(null), 3500);
+    return () => window.clearTimeout(h);
+  }, [toast]);
+
+  const setWindow = (w: WindowSel) => {
+    const next = new URLSearchParams(params);
+    for (const k of ['window', 'from', 'to']) next.delete(k);
+    if (w.kind !== 'steady') windowParams(w).forEach((v, k) => next.set(k, v));
+    setParams(next, { replace: true });
+  };
+  const onSelectRange = useCallback(
+    (a: number, b2: number) => {
+      const w = customWindow(a, b2);
+      if (w) setWindow(w);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params],
+  );
+  const highlight =
+    rep && rep.window.kind !== 'full' && rep.window.to > rep.window.from
+      ? { from: rep.window.from, to: rep.window.to, label: rep.window.kind === 'custom' ? 'window' : 'steady state' }
+      : null;
+
+  const doDelete = async () => {
+    setDelBusy(true);
+    setDelErr(null);
+    try {
+      await api.deleteRun(run.id);
+      nav(`/runs`, { replace: true });
+    } catch (e) {
+      setDelErr(e);
+      setDelBusy(false);
+    }
+  };
+  const setAsBaseline = async (rid: string) => {
+    setBaselineBusy(true);
+    try {
+      const t = await api.setBaseline(run.test_id, rid);
+      test.setData(t);
+      report.reload();
+      setToast({ text: rid ? 'This run is now the baseline of the test.' : 'Baseline cleared.' });
+    } catch (e) {
+      setToast({ text: `Baseline: ${errorText(e).message}`, bad: true });
+    } finally {
+      setBaselineBusy(false);
+    }
+  };
+  const dl = (url: string, name: string, what: string) => {
+    setToast({ text: `Downloading ${what}…` });
+    download(url, name).catch((e) => setToast({ text: `${what}: ${errorText(e).message}`, bad: true }));
+  };
+  const compareWithBaselineUrl = cmp
+    ? `/compare?${new URLSearchParams({
+        runs: `${cmp.reference_run_id},${run.id}`,
+        ...(win.kind === 'steady' ? {} : Object.fromEntries(windowParams(win))),
+      }).toString()}`
+    : '';
 
   return (
     <>
       <RunHeader run={run}>
-        <button className="btn" onClick={() => setCompareOpen(true)}>
-          <Icon name="compare" size={14} /> Compare with…
-        </button>
-        <button className="btn" onClick={() => nav(`/tests/${run.test_id}`)}>
-          <Icon name="edit" size={14} /> Edit test
-        </button>
+        <div className="row no-print" style={{ gap: 8 }}>
+          <button className="btn" onClick={() => setCompareOpen(true)}>
+            <Icon name="compare" size={14} /> Compare with…
+          </button>
+          <Menu
+            label={
+              <>
+                <Icon name="download" size={14} /> Export
+              </>
+            }
+            items={[
+              {
+                label: 'HTML report',
+                hint: `printable, ${winText.toLowerCase()}`,
+                icon: 'file',
+                onSelect: () => dl(exportUrls.html(run.id, win), `goload-${run.test_name}-${shortId(run.id)}.html`, 'HTML report'),
+              },
+              {
+                label: 'CSV',
+                hint: 'per-second metrics',
+                icon: 'download',
+                onSelect: () => dl(exportUrls.csv(run.id), `goload-${shortId(run.id)}-metrics.csv`, 'CSV'),
+              },
+              {
+                label: 'JSON',
+                hint: 'run, metrics and errors',
+                icon: 'download',
+                onSelect: () => dl(exportUrls.json(run.id), `goload-${shortId(run.id)}.json`, 'JSON'),
+              },
+              { label: 'Print…', icon: 'print', divider: true, onSelect: () => window.print() },
+            ]}
+          />
+          <button className="btn" onClick={() => nav(`/tests/${run.test_id}`)}>
+            <Icon name="edit" size={14} /> Edit test
+          </button>
+          <button className="btn ghost icon danger" title="Delete run" aria-label="Delete run" onClick={() => setConfirmDelete(true)}>
+            <Icon name="trash" size={15} />
+          </button>
+        </div>
       </RunHeader>
 
       <div className="stack" style={{ gap: 12 }}>
@@ -392,7 +516,15 @@ export function ResultView({ run }: { run: Run }) {
               {thresholds.length > 0 && ` · ${thresholds.length - failedCount}/${thresholds.length} thresholds passed`}
             </div>
           </div>
+          {cmp && (
+            <a className="banner-verdict" href={`#vs-baseline`}>
+              <OverallBadge c={cmp} />
+              <span className="muted">vs baseline</span>
+            </a>
+          )}
         </div>
+
+        <LabelNotes run={run} onSaved={setRun} />
 
         {run.error && (
           <div className="alert bad">
@@ -415,24 +547,43 @@ export function ResultView({ run }: { run: Run }) {
           </div>
         )}
 
+        {hasResults && (
+          <div className="report-toolbar">
+            <WindowControl value={win} onChange={setWindow} resolved={rep?.window} />
+            <span className="spacer" />
+            {report.loading && rep && <span className="spinner" aria-label="Updating" />}
+            <span className="report-scope">
+              Summary, thresholds and steps over <b>{winText}</b>
+            </span>
+          </div>
+        )}
+        {report.error && hasResults ? <ErrorAlert error={report.error} title="Windowed report unavailable — showing the whole run" /> : null}
+
         <div className="kpis">
           <Kpi label="Requests" value={fmtInt(s?.requests)} sub={`${fmtInt(s?.dropped)} dropped`} />
-          <Kpi label="Throughput" value={fmtRps(s?.rps)} unit="req/s" sub={sum ? `peak target ${sum.peak} ${unit}` : undefined} />
+          <Kpi
+            label="Throughput"
+            value={fmtRps(s?.rps)}
+            unit="req/s"
+            sub={<KpiDelta c={cmp} metric="rps" fallback={sum ? `peak target ${sum.peak} ${unit}` : undefined} />}
+          />
           <Kpi
             label="Error rate"
             value={fmtPct(s?.error_rate)}
             tone={s && s.error_rate > 0.05 ? 'bad' : s && s.error_rate > 0.01 ? 'warn' : undefined}
-            sub={`${fmtInt(s?.errors)} errors`}
+            sub={<KpiDelta c={cmp} metric="error_rate" fallback={`${fmtInt(s?.errors)} errors`} />}
           />
-          <Kpi label="p50" value={fmtMs(s?.p50_ms)} sub={`mean ${fmtMs(s?.mean_ms)}`} />
-          <Kpi label="p95" value={fmtMs(s?.p95_ms)} sub={`p90 ${fmtMs(s?.p90_ms)}`} />
-          <Kpi label="p99" value={fmtMs(s?.p99_ms)} sub={`max ${fmtMs(s?.max_ms)}`} />
+          <Kpi label="p50" value={fmtMs(s?.p50_ms)} sub={<KpiDelta c={cmp} metric="p50_ms" fallback={`mean ${fmtMs(s?.mean_ms)}`} />} />
+          <Kpi label="p95" value={fmtMs(s?.p95_ms)} sub={<KpiDelta c={cmp} metric="p95_ms" fallback={`p90 ${fmtMs(s?.p90_ms)}`} />} />
+          <Kpi label="p99" value={fmtMs(s?.p99_ms)} sub={<KpiDelta c={cmp} metric="p99_ms" fallback={`max ${fmtMs(s?.max_ms)}`} />} />
         </div>
 
         <div className="grid-2" style={{ gap: 12, gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)' }}>
           <div className="card">
             <div className="card-head">
               <h2>Thresholds</h2>
+              <span className="spacer" />
+              {hasResults && <span className="window-tag">{winText}</span>}
             </div>
             {thresholds.length === 0 ? (
               <div className="empty">No thresholds defined.</div>
@@ -464,18 +615,43 @@ export function ResultView({ run }: { run: Run }) {
                 </tbody>
               </table>
             )}
+            {rep && (run.status === 'passed' || run.status === 'failed') && failedCount > 0 !== (run.status === 'failed') && (
+              <div className="hint" style={{ padding: '6px 14px 10px' }}>
+                The run status reflects the whole run; over this window the thresholds {failedCount ? 'fail' : 'pass'}.
+              </div>
+            )}
           </div>
-          <StepTable summary={s} />
+          <BaselinePanel
+            cmp={cmp}
+            run={run}
+            testLoaded={!!test.data}
+            baselineId={baselineId}
+            isBaseline={isBaseline}
+            hasResults={hasResults}
+            busy={baselineBusy}
+            compareUrl={compareWithBaselineUrl}
+            onSet={() => setAsBaseline(run.id)}
+            onClear={() => setAsBaseline('')}
+          />
         </div>
 
+        <StepTable summary={s} title={hasResults ? winText : undefined} />
+
         {metrics.error ? <ErrorAlert error={metrics.error} title="Metrics unavailable" /> : null}
-        <RunCharts points={metrics.data ?? []} targetUnit={unit} finished />
+        <RunCharts
+          points={metrics.data ?? []}
+          targetUnit={unit}
+          finished
+          highlight={highlight}
+          onSelectRange={hasResults ? onSelectRange : undefined}
+          throughputExtra={hasResults ? <span className="muted no-print" style={{ fontSize: 11.5 }}>drag to set a custom window</span> : undefined}
+        />
 
         <div className="card">
           <div className="card-head">
             <h2>Error samples</h2>
             <span className="spacer" />
-            <span className="muted">{errors.data ? `${errors.data.length} kept` : ''}</span>
+            <span className="muted">{errors.data ? `${errors.data.length} kept · whole run` : ''}</span>
           </div>
           {errors.loading ? (
             <Loading />
@@ -486,7 +662,7 @@ export function ResultView({ run }: { run: Run }) {
           ) : (errors.data ?? []).length === 0 ? (
             <div className="empty">No errors recorded.</div>
           ) : (
-            <div className="table-wrap" style={{ maxHeight: 320, overflowY: 'auto' }}>
+            <div className="table-wrap errors-wrap">
               <table className="t compact">
                 <thead>
                   <tr>
@@ -517,23 +693,242 @@ export function ResultView({ run }: { run: Run }) {
           )}
         </div>
 
-        <details className="card collapsible">
+        <details className="card collapsible no-print">
           <summary>Scenario YAML used</summary>
           <pre className="code">{run.yaml}</pre>
         </details>
       </div>
 
       {compareOpen && <CompareDialog run={run} onClose={() => setCompareOpen(false)} />}
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete this run?"
+          message={
+            <>
+              The run{run.label ? <> <b>{run.label}</b></> : ''} of <b>{run.test_name}</b> from {fmtDateTime(run.started_at)}, its
+              metrics and error samples are deleted permanently.
+              {isBaseline && ' It is the baseline of its test; the test will have no baseline afterwards.'}
+            </>
+          }
+          confirmLabel="Delete run"
+          busy={delBusy}
+          error={delErr}
+          onConfirm={doDelete}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
+      {toast && <div className={`toast ${toast.bad ? 'bad' : ''}`}>{toast.text}</div>}
     </>
   );
 }
 
-export function StepTable({ summary }: { summary: Summary | undefined }) {
+/** KPI sub line: delta vs baseline when there is a comparison, else the fallback. */
+function KpiDelta({ c, metric, fallback }: { c: Comparison | undefined; metric: string; fallback?: ReactNode }) {
+  const d = findDelta(c, metric);
+  if (!d) return <>{fallback}</>;
+  return (
+    <>
+      <DeltaText d={d} /> <span className="muted">vs baseline</span>
+    </>
+  );
+}
+
+function BaselinePanel({
+  cmp,
+  run,
+  testLoaded,
+  baselineId,
+  isBaseline,
+  hasResults,
+  busy,
+  compareUrl,
+  onSet,
+  onClear,
+}: {
+  cmp: Comparison | undefined;
+  run: Run;
+  testLoaded: boolean;
+  baselineId: string;
+  isBaseline: boolean;
+  hasResults: boolean;
+  busy: boolean;
+  compareUrl: string;
+  onSet: () => void;
+  onClear: () => void;
+}) {
+  const v = overallVerdict(cmp);
+  return (
+    <div className="card" id="vs-baseline" style={{ minWidth: 0 }}>
+      <div className="card-head">
+        <h2>vs baseline</h2>
+        {cmp && (
+          <span className={`verdict-pill ${v === 'regressed' ? 'bad' : 'good'}`}>
+            {v === 'regressed' ? `Regression · ${regressionText(cmp)}` : 'No regression'}
+          </span>
+        )}
+        <span className="spacer" />
+        {cmp && (
+          <>
+            <span className="muted num" style={{ fontSize: 11.5 }}>
+              tolerance ±{Math.round((cmp.tolerance || 0.1) * 100)}%
+            </span>
+            <Link className="btn sm ghost no-print" to={compareUrl}>
+              Open in compare →
+            </Link>
+          </>
+        )}
+      </div>
+      {cmp ? (
+        <>
+          <div className="baseline-ref">
+            Reference: <Link to={`/runs/${cmp.reference_run_id}`}>baseline run {shortId(cmp.reference_run_id)}</Link> · same window
+          </div>
+          <MetricDeltaTable c={cmp} refHead="Baseline" candHead="This run" />
+        </>
+      ) : !testLoaded ? (
+        <Loading />
+      ) : isBaseline ? (
+        <div className="empty">
+          <strong>
+            <span className="row" style={{ justifyContent: 'center' }}>
+              <BaselineBadge /> This run is the baseline of {run.test_name}
+            </span>
+          </strong>
+          New runs of this test are compared against it.{' '}
+          <button className="linklike no-print" onClick={onClear} disabled={busy}>
+            Clear baseline
+          </button>
+        </div>
+      ) : baselineId ? (
+        <div className="empty">
+          <strong>Not comparable with the baseline</strong>
+          The baseline run has no results for this window.
+        </div>
+      ) : (
+        <div className="empty">
+          <strong>No baseline for {run.test_name}</strong>
+          A baseline is the reference run that new runs are checked against for regressions.
+          {hasResults && (
+            <div style={{ marginTop: 10 }}>
+              <button className="btn no-print" onClick={onSet} disabled={busy}>
+                <Icon name="flag" size={13} /> Set this run as baseline
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Inline-editable label (chip) and notes, saved with PATCH /api/runs/{id}. */
+function LabelNotes({ run, onSaved }: { run: Run; onSaved: (r: Run) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState(run.label ?? '');
+  const [notes, setNotes] = useState(run.notes ?? '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const start = () => {
+    setLabel(run.label ?? '');
+    setNotes(run.notes ?? '');
+    setErr(null);
+    setEditing(true);
+  };
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.updateRun(run.id, { label: label.trim(), notes });
+      onSaved({ ...run, ...r, label: r.label ?? label.trim(), notes: r.notes ?? notes });
+      setEditing(false);
+    } catch (e) {
+      setErr(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (editing) {
+    return (
+      <div className="card label-notes editing no-print">
+        <div className="card-body stack" style={{ gap: 10 }}>
+          <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
+            <div className="field" style={{ width: 220, flex: 'none' }}>
+              <label htmlFor="run-label">Label</label>
+              <input
+                id="run-label"
+                className="input mono"
+                value={label}
+                maxLength={100}
+                placeholder="e.g. v1.4.2"
+                autoFocus
+                onChange={(e) => setLabel(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') save();
+                  if (e.key === 'Escape') setEditing(false);
+                }}
+              />
+            </div>
+            <div className="field grow">
+              <label htmlFor="run-notes">Notes</label>
+              <textarea
+                id="run-notes"
+                className="input"
+                rows={3}
+                value={notes}
+                maxLength={10000}
+                placeholder="What changed, environment, links…"
+                onChange={(e) => setNotes(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save();
+                  if (e.key === 'Escape') setEditing(false);
+                }}
+              />
+            </div>
+          </div>
+          <ErrorAlert error={err} title="Could not save" />
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            <button className="btn primary" onClick={save} disabled={busy}>
+              {busy ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const hasAny = (run.label ?? '').trim() || (run.notes ?? '').trim();
+  return (
+    <div className={`label-notes ${hasAny ? 'card' : ''}`}>
+      {hasAny ? (
+        <div className="ln-view">
+          <span className="ln-key">Notes</span>
+          <span className={`ln-notes ${run.notes ? '' : 'muted'}`}>{run.notes || 'No notes.'}</span>
+          <button className="btn sm ghost no-print" onClick={start}>
+            <Icon name="edit" size={12} /> Edit label & notes
+          </button>
+        </div>
+      ) : (
+        <div className="ln-empty no-print">
+          <button className="linklike" onClick={start}>
+            + Add a label and notes
+          </button>
+          <span className="muted"> — e.g. the version under test, so runs are easy to find and compare</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function StepTable({ summary, title }: { summary: Summary | undefined; title?: string }) {
   const steps = Object.entries(summary?.by_step ?? {});
   return (
     <div className="card" style={{ minWidth: 0 }}>
       <div className="card-head">
         <h2>Per step</h2>
+        <span className="spacer" />
+        {title && <span className="window-tag">{title}</span>}
       </div>
       {steps.length === 0 ? (
         <div className="empty">No per-step data.</div>
@@ -591,7 +986,7 @@ function CompareDialog({ run, onClose }: { run: Run; onClose: () => void }) {
   }, [candidates, same, pick]);
 
   const label = (r: Run) =>
-    `${r.test_name} · ${fmtDateTime(r.started_at)} · ${r.status}${r.summary ? ` · p95 ${fmtMs(r.summary.p95_ms)}` : ''}`;
+    `${r.test_name}${r.label ? ` · ${r.label}` : ''} · ${fmtDateTime(r.started_at)} · ${r.status}${r.summary ? ` · p95 ${fmtMs(r.summary.p95_ms)}` : ''}`;
 
   return (
     <Modal
@@ -602,7 +997,7 @@ function CompareDialog({ run, onClose }: { run: Run; onClose: () => void }) {
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn primary" disabled={!pick} onClick={() => nav(`/compare?a=${pick}&b=${run.id}`)}>
+          <button className="btn primary" disabled={!pick} onClick={() => nav(`/compare?runs=${pick},${run.id}`)}>
             Compare
           </button>
         </>
@@ -614,7 +1009,7 @@ function CompareDialog({ run, onClose }: { run: Run; onClose: () => void }) {
         <div className="muted">No other finished runs to compare with.</div>
       ) : (
         <div className="field">
-          <label>Baseline run (A)</label>
+          <label>Reference run</label>
           <select className="input" value={pick} onChange={(e) => setPick(e.target.value)}>
             {same.length > 0 && (
               <optgroup label={`Same test (${run.test_name})`}>
@@ -635,7 +1030,7 @@ function CompareDialog({ run, onClose }: { run: Run; onClose: () => void }) {
               </optgroup>
             )}
           </select>
-          <div className="hint">This run will be shown as B, compared against the baseline A.</div>
+          <div className="hint">This run is compared against the reference. Add more runs (up to 6) on the compare page.</div>
         </div>
       )}
     </Modal>

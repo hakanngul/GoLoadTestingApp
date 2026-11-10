@@ -1,317 +1,587 @@
-import { useMemo } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { api } from '../api/client';
-import { isFinished, type MetricPoint, type Run, type Summary } from '../api/types';
-import { ChartCard, TimeSeriesChart, usePalette, yMs, yPct, type Series } from '../components/charts';
-import { Delta, ErrorAlert, Loading, StatusBadge } from '../components/ui';
-import { fmtDateTime, fmtInt, fmtMs, fmtPct, fmtRps, fmtSeconds, runDurationS, shortId } from '../lib/format';
-import { useAsync } from '../lib/hooks';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { api, saveBlob } from '../api/client';
+import { isFinished, type CompareResult, type MetricPoint, type Run, type RunReport, type Summary } from '../api/types';
+import { ChartCard, runColors, TimeSeriesChart, usePalette, yMs, yPct, type Series } from '../components/charts';
+import { DeltaText, OverallBadge, RunLabel, WindowControl } from '../components/report';
+import { ErrorAlert, Icon, Loading, StatusBadge } from '../components/ui';
+import { fmtDateTime, fmtInt, fmtMs, fmtPct, fmtRps, shortId } from '../lib/format';
+import { useAsync, useDebounced } from '../lib/hooks';
 import { trimPartialTail } from '../lib/metrics';
-
-interface Loaded {
-  run: Run;
-  metrics: MetricPoint[];
-}
-
-async function loadRun(id: string): Promise<Loaded | null> {
-  if (!id) return null;
-  const [run, metrics] = await Promise.all([api.getRun(id), api.runMetrics(id)]);
-  return { run, metrics: isFinished(run.status) ? trimPartialTail(metrics) : metrics };
-}
+import {
+  compareCsv,
+  fmtMetric,
+  fmtShortDate,
+  MAX_COMPARE,
+  metricInfo,
+  METRIC_ORDER,
+  moveItem,
+  parseRunIds,
+  parseTolerance,
+  parseWindow,
+  runName,
+  verdictTone,
+  windowLabel,
+  windowParams,
+  type WindowSel,
+} from '../lib/report';
 
 type Row = Record<string, number | null>;
 
-function overlay(a: MetricPoint[], b: MetricPoint[], key: keyof MetricPoint): Row[] {
+/** Per-second rows keyed by elapsed second with one column per run (r0..r5). */
+function overlay(series: MetricPoint[][], key: keyof MetricPoint): Row[] {
   const m = new Map<number, Row>();
-  const put = (pts: MetricPoint[], col: 'a' | 'b') => {
+  series.forEach((pts, i) => {
     for (const p of pts) {
       const k = Math.round(p.elapsed);
-      const row = m.get(k) ?? { elapsed: k, a: null, b: null };
-      row[col] = p[key] as number;
+      const row = m.get(k) ?? { elapsed: k };
+      row[`r${i}`] = p[key] as number;
       m.set(k, row);
     }
-  };
-  put(a, 'a');
-  put(b, 'b');
+  });
   return [...m.values()].sort((x, y) => (x.elapsed as number) - (y.elapsed as number));
 }
 
-const METRICS: { label: string; get: (s: Summary) => number; fmt: (v: number) => string; lower: boolean; points?: boolean }[] = [
-  { label: 'Requests', get: (s) => s.requests, fmt: fmtInt, lower: false },
-  { label: 'Throughput (req/s)', get: (s) => s.rps, fmt: fmtRps, lower: false },
-  { label: 'Error rate', get: (s) => s.error_rate, fmt: (v) => fmtPct(v), lower: true, points: true },
-  { label: 'Dropped', get: (s) => s.dropped, fmt: fmtInt, lower: true },
-  { label: 'Mean', get: (s) => s.mean_ms, fmt: fmtMs, lower: true },
-  { label: 'p50', get: (s) => s.p50_ms, fmt: fmtMs, lower: true },
-  { label: 'p90', get: (s) => s.p90_ms, fmt: fmtMs, lower: true },
-  { label: 'p95', get: (s) => s.p95_ms, fmt: fmtMs, lower: true },
-  { label: 'p99', get: (s) => s.p99_ms, fmt: fmtMs, lower: true },
-  { label: 'Max', get: (s) => s.max_ms, fmt: fmtMs, lower: true },
-];
-
 export function ComparePage() {
-  const [params, setParams] = useSearchParams();
-  const a = params.get('a') ?? '';
-  const b = params.get('b') ?? '';
-  const runs = useAsync(() => api.listRuns({ limit: 200 }), []);
-  const ra = useAsync(() => loadRun(a), [a]);
-  const rb = useAsync(() => loadRun(b), [b]);
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  // Keep run-id lists readable (commas unescaped) in the address bar.
+  const setParams = (next: URLSearchParams) =>
+    navigate({ search: `?${next.toString().replace(/%2C/gi, ',')}` }, { replace: true });
+  const ids = useMemo(() => parseRunIds(params), [params]);
+  const idsKey = ids.join(',');
+  const win = parseWindow(params);
+  const winKey = windowParams(win).toString();
+  const tolParam = params.get('tol');
+  const tolPct = tolParam !== null && parseTolerance(tolParam) !== null ? tolParam : '10';
+  const [tolInput, setTolInput] = useState(tolPct);
+  const tolDebounced = useDebounced(tolInput, 400);
+  const tolerance = parseTolerance(tolPct) ?? 0.1;
   const pal = usePalette();
+  const colors = runColors(pal);
 
-  const options = (runs.data ?? []).filter((r) => isFinished(r.status));
-  const setSide = (side: 'a' | 'b', v: string) => {
+  // Legacy ?a=&b= links: rewrite to ?runs=.
+  useEffect(() => {
+    if (params.get('runs') === null && (params.get('a') || params.get('b'))) {
+      const next = new URLSearchParams(params);
+      next.delete('a');
+      next.delete('b');
+      if (ids.length) next.set('runs', ids.join(','));
+      setParams(next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params, ids]);
+
+  const update = (mut: (p: URLSearchParams) => void) => {
     const next = new URLSearchParams(params);
-    if (v) next.set(side, v);
-    else next.delete(side);
+    next.delete('a');
+    next.delete('b');
+    mut(next);
     setParams(next);
   };
+  const setIds = (list: string[]) =>
+    update((p) => (list.length ? p.set('runs', list.join(',')) : p.delete('runs')));
+  const setWindow = (w: WindowSel) =>
+    update((p) => {
+      for (const k of ['window', 'from', 'to']) p.delete(k);
+      if (w.kind !== 'steady') windowParams(w).forEach((v, k) => p.set(k, v));
+    });
 
-  const A = ra.data ?? null;
-  const B = rb.data ?? null;
-  const series = (what: string): Series[] => [
-    { key: 'a', label: `A · ${what}`, color: pal['--series-1'] },
-    { key: 'b', label: `B · ${what}`, color: pal['--series-2'] },
-  ];
-  const p95Rows = useMemo(() => (A && B ? overlay(A.metrics, B.metrics, 'p95_ms') : []), [A, B]);
-  const rpsRows = useMemo(() => (A && B ? overlay(A.metrics, B.metrics, 'rps') : []), [A, B]);
-  const errRows = useMemo(() => (A && B ? overlay(A.metrics, B.metrics, 'error_rate') : []), [A, B]);
+  useEffect(() => {
+    const t = parseTolerance(tolDebounced);
+    if (t === null || tolDebounced === tolPct) return;
+    update((p) => (tolDebounced.trim() === '10' ? p.delete('tol') : p.set('tol', tolDebounced.trim().replace(/%$/, ''))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tolDebounced]);
 
-  const label = (r: Run) =>
-    `${r.test_name} · ${fmtDateTime(r.started_at)} · ${r.status}${r.summary ? ` · p95 ${fmtMs(r.summary.p95_ms)}` : ''}`;
-
-  const picker = (side: 'a' | 'b', value: string) => (
-    <div className="field" style={{ flex: 1, minWidth: 0 }}>
-      <label className="row" style={{ gap: 6 }}>
-        <span
-          style={{
-            width: 10,
-            height: 10,
-            borderRadius: 2,
-            background: side === 'a' ? pal['--series-1'] : pal['--series-2'],
-            display: 'inline-block',
-          }}
-        />
-        Run {side.toUpperCase()} {side === 'a' ? '(baseline)' : '(candidate)'}
-      </label>
-      <select className="input" value={value} onChange={(e) => setSide(side, e.target.value)}>
-        <option value="">— select a run —</option>
-        {value && !options.some((r) => r.id === value) && <option value={value}>{shortId(value)}</option>}
-        {options.map((r) => (
-          <option key={r.id} value={r.id}>
-            {label(r)}
-          </option>
-        ))}
-      </select>
-    </div>
+  const allRuns = useAsync(() => api.listRuns({ limit: 200 }), []);
+  const result = useAsync<CompareResult | null>(
+    () => (ids.length >= 2 ? api.compare(ids, win, tolerance) : Promise.resolve(null)),
+    [idsKey, winKey, tolerance],
+  );
+  const metrics = useAsync<MetricPoint[][]>(
+    () =>
+      Promise.all(
+        ids.map((id) =>
+          api
+            .runMetrics(id)
+            .then(trimPartialTail)
+            .catch(() => [] as MetricPoint[]),
+        ),
+      ),
+    [idsKey],
   );
 
-  const sa = A?.run.summary;
-  const sb = B?.run.summary;
-  const stepNames = useMemo(() => {
-    const names = new Set<string>([...Object.keys(sa?.by_step ?? {}), ...Object.keys(sb?.by_step ?? {})]);
-    return [...names];
-  }, [sa, sb]);
+  const known = useMemo(() => new Map((allRuns.data ?? []).map((r) => [r.id, r])), [allRuns.data]);
+  const res = result.data && result.data.runs.map((r) => r.run.id).join(',') === idsKey ? result.data : null;
+  const reports = res?.runs ?? [];
+
+  const exportCsv = () => {
+    if (!res) return;
+    saveBlob(new Blob([compareCsv(res)], { type: 'text/csv;charset=utf-8' }), `goload-compare-${ids.map(shortId).join('-')}.csv`);
+  };
+
+  const runSeries: Series[] = ids.map((id, i) => {
+    const r = reports[i]?.run ?? known.get(id);
+    return { key: `r${i}`, label: r ? `${runName(r)}${i === 0 ? ' (ref)' : ''}` : shortId(id), color: colors[i] };
+  });
+  const pts = metrics.data && metrics.data.length === ids.length ? metrics.data : [];
+  const p95Rows = useMemo(() => overlay(pts, 'p95_ms'), [pts]);
+  const rpsRows = useMemo(() => overlay(pts, 'rps'), [pts]);
+  const errRows = useMemo(() => overlay(pts, 'error_rate'), [pts]);
 
   return (
     <>
       <div className="page-head">
         <div>
           <h1>Compare runs</h1>
-          <div className="page-sub">Deltas show B relative to A · green = better, red = worse</div>
+          <div className="page-sub">
+            First run is the reference · deltas are relative to it · <span className="good">green</span> better,{' '}
+            <span className="bad">red</span> worse beyond the tolerance
+          </div>
+        </div>
+        <span className="spacer" />
+        <button className="btn" onClick={exportCsv} disabled={!res}>
+          <Icon name="download" size={14} /> Export CSV
+        </button>
+      </div>
+
+      <div className="card compare-setup" style={{ marginBottom: 12 }}>
+        <div className="card-head">
+          <h2>Runs</h2>
+          <span className="muted num" style={{ fontSize: 12 }}>
+            {ids.length}/{MAX_COMPARE} · drag to reorder
+          </span>
+          <span className="spacer" />
+          <WindowControl value={win} onChange={setWindow} allowCustom={false} />
+          <label className="tol-field" title="Changes smaller than this are shown as “same” (error rate: a tenth of it, in points)">
+            <span className="wc-label">Tolerance</span>
+            <span className="input-addon">
+              <input
+                className={`input num ${parseTolerance(tolInput) === null ? 'invalid' : ''}`}
+                style={{ width: 56 }}
+                value={tolInput}
+                inputMode="decimal"
+                onChange={(e) => setTolInput(e.target.value)}
+              />
+              <span className="addon">%</span>
+            </span>
+          </label>
+        </div>
+        <div className="card-body">
+          <RunSlots
+            ids={ids}
+            runFor={(id, i) => reports[i]?.run ?? known.get(id)}
+            colors={colors}
+            onChange={setIds}
+            candidates={(allRuns.data ?? []).filter((r) => isFinished(r.status) && !!r.summary && !ids.includes(r.id))}
+            loadingCandidates={allRuns.loading && !allRuns.data}
+          />
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div className="card-body row" style={{ gap: 16, alignItems: 'flex-end' }}>
-          {picker('a', a)}
-          <button
-            className="btn"
-            title="Swap A and B"
-            onClick={() => {
-              const next = new URLSearchParams(params);
-              if (b) next.set('a', b);
-              else next.delete('a');
-              if (a) next.set('b', a);
-              else next.delete('b');
-              setParams(next);
-            }}
-          >
-            ⇄ Swap
-          </button>
-          {picker('b', b)}
-        </div>
-      </div>
+      {result.error ? <ErrorAlert error={result.error} title="Compare failed" /> : null}
 
-      {ra.error ? <ErrorAlert error={ra.error} title="Run A" /> : null}
-      {rb.error ? <ErrorAlert error={rb.error} title="Run B" /> : null}
-
-      {!a || !b ? (
+      {ids.length < 2 ? (
         <div className="card">
           <div className="empty">
-            <strong>Select two runs</strong>
-            Pick a baseline (A) and a candidate (B) to compare their results side by side.
+            <strong>Select at least two runs</strong>
+            The first run is the reference; up to {MAX_COMPARE - 1} more are compared against it. Tip: open a{' '}
+            <Link to="/reports">test report</Link> and tick runs to compare.
           </div>
         </div>
-      ) : (ra.loading && !A) || (rb.loading && !B) ? (
-        <Loading />
-      ) : A && B ? (
+      ) : !res ? (
+        result.loading ? <Loading /> : null
+      ) : (
         <div className="stack" style={{ gap: 12 }}>
-          <div className="card">
-            <div className="table-wrap">
-              <table className="t">
-                <thead>
-                  <tr>
-                    <th style={{ width: '24%' }}>Metric</th>
-                    <th className="num">
-                      A · <Link className="mono" style={{ textTransform: 'none' }} to={`/runs/${A.run.id}`}>{shortId(A.run.id)}</Link>
-                    </th>
-                    <th className="num">
-                      B · <Link className="mono" style={{ textTransform: 'none' }} to={`/runs/${B.run.id}`}>{shortId(B.run.id)}</Link>
-                    </th>
-                    <th className="num">Δ B vs A</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td className="text-2">Test</td>
-                    <td className="num">{A.run.test_name}</td>
-                    <td className="num">{B.run.test_name}</td>
-                    <td />
-                  </tr>
-                  <tr>
-                    <td className="text-2">Status</td>
-                    <td className="num">
-                      <StatusBadge status={A.run.status} />
-                    </td>
-                    <td className="num">
-                      <StatusBadge status={B.run.status} />
-                    </td>
-                    <td />
-                  </tr>
-                  <tr>
-                    <td className="text-2">Started · duration</td>
-                    <td className="num">
-                      {fmtDateTime(A.run.started_at)} · {fmtSeconds(runDurationS(A.run.started_at, A.run.finished_at))}
-                    </td>
-                    <td className="num">
-                      {fmtDateTime(B.run.started_at)} · {fmtSeconds(runDurationS(B.run.started_at, B.run.finished_at))}
-                    </td>
-                    <td />
-                  </tr>
-                  {METRICS.map((m) => {
-                    const va = sa ? m.get(sa) : undefined;
-                    const vb = sb ? m.get(sb) : undefined;
-                    return (
-                      <tr key={m.label}>
-                        <td style={{ fontWeight: 600 }}>{m.label}</td>
-                        <td className="num">{va !== undefined ? m.fmt(va) : '—'}</td>
-                        <td className="num">{vb !== undefined ? m.fmt(vb) : '—'}</td>
-                        <td className="num">
-                          <Delta a={va} b={vb} lowerIsBetter={m.lower} asPoints={m.points} />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <SummaryMatrix res={res} colors={colors} />
 
           <div className="grid-2" style={{ gap: 12 }}>
-            <ChartCard title="Latency p95 (ms)" series={series('p95')}>
-              <TimeSeriesChart data={p95Rows} series={series('p95')} fmt={fmtMs} yFmt={yMs} emptyText="No metrics" />
+            <ChartCard title="Latency p95 (ms)" series={runSeries}>
+              <TimeSeriesChart data={p95Rows} series={runSeries} fmt={fmtMs} yFmt={yMs} emptyText="No metrics" />
             </ChartCard>
-            <ChartCard title="Throughput (req/s)" series={series('rps')}>
-              <TimeSeriesChart data={rpsRows} series={series('rps')} fmt={fmtRps} emptyText="No metrics" />
+            <ChartCard title="Throughput (req/s)" series={runSeries}>
+              <TimeSeriesChart data={rpsRows} series={runSeries} fmt={fmtRps} emptyText="No metrics" />
             </ChartCard>
           </div>
-          <ChartCard title="Error rate" series={series('error rate')}>
-            <TimeSeriesChart
-              data={errRows}
-              series={series('error rate')}
-              fmt={(v) => fmtPct(v)}
-              yFmt={yPct}
-              height={180}
-              emptyText="No metrics"
-            />
+          <ChartCard title="Error rate" series={runSeries}>
+            <TimeSeriesChart data={errRows} series={runSeries} fmt={(v) => fmtPct(v)} yFmt={yPct} height={180} emptyText="No metrics" />
           </ChartCard>
-
-          <div className="card">
-            <div className="card-head">
-              <h2>Per step</h2>
-            </div>
-            {stepNames.length === 0 ? (
-              <div className="empty">No per-step data.</div>
-            ) : (
-              <div className="table-wrap">
-                <table className="t compact">
-                  <thead>
-                    <tr>
-                      <th rowSpan={2}>Step</th>
-                      <th className="num" colSpan={3}>
-                        p95
-                      </th>
-                      <th className="num" colSpan={3}>
-                        p99
-                      </th>
-                      <th className="num" colSpan={3}>
-                        RPS
-                      </th>
-                      <th className="num" colSpan={3}>
-                        Error rate
-                      </th>
-                    </tr>
-                    <tr>
-                      {[0, 1, 2, 3].flatMap((i) => [
-                        <th key={`a${i}`} className="num">
-                          A
-                        </th>,
-                        <th key={`b${i}`} className="num">
-                          B
-                        </th>,
-                        <th key={`d${i}`} className="num">
-                          Δ
-                        </th>,
-                      ])}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stepNames.map((n) => {
-                      const x = sa?.by_step?.[n];
-                      const y = sb?.by_step?.[n];
-                      return (
-                        <tr key={n}>
-                          <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{n}</td>
-                          <td className="num">{fmtMs(x?.p95_ms)}</td>
-                          <td className="num">{fmtMs(y?.p95_ms)}</td>
-                          <td className="num">
-                            <Delta a={x?.p95_ms} b={y?.p95_ms} lowerIsBetter />
-                          </td>
-                          <td className="num">{fmtMs(x?.p99_ms)}</td>
-                          <td className="num">{fmtMs(y?.p99_ms)}</td>
-                          <td className="num">
-                            <Delta a={x?.p99_ms} b={y?.p99_ms} lowerIsBetter />
-                          </td>
-                          <td className="num">{fmtRps(x?.rps)}</td>
-                          <td className="num">{fmtRps(y?.rps)}</td>
-                          <td className="num">
-                            <Delta a={x?.rps} b={y?.rps} lowerIsBetter={false} />
-                          </td>
-                          <td className="num">{fmtPct(x?.error_rate)}</td>
-                          <td className="num">{fmtPct(y?.error_rate)}</td>
-                          <td className="num">
-                            <Delta a={x?.error_rate} b={y?.error_rate} lowerIsBetter asPoints />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+          <div className="muted" style={{ fontSize: 11.5, marginTop: -4 }}>
+            Charts are aligned on seconds since each run's start and show the whole runs; the tables use the {windowLabel(win).toLowerCase()}{' '}
+            window.
           </div>
+
+          <StepCompare res={res} colors={colors} />
         </div>
-      ) : null}
+      )}
     </>
+  );
+}
+
+// ---------- run slots (selection, reference, reorder, picker) ----------
+
+function RunSlots({
+  ids,
+  runFor,
+  colors,
+  onChange,
+  candidates,
+  loadingCandidates,
+}: {
+  ids: string[];
+  runFor: (id: string, i: number) => Run | undefined;
+  colors: string[];
+  onChange: (ids: string[]) => void;
+  candidates: Run[];
+  loadingCandidates: boolean;
+}) {
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [over, setOver] = useState<number | null>(null);
+  const [picking, setPicking] = useState(false);
+  return (
+    <div className="run-slots">
+      {ids.map((id, i) => {
+        const r = runFor(id, i);
+        return (
+          <div
+            key={id}
+            className={`run-slot ${i === 0 ? 'ref' : ''} ${over === i && dragFrom !== null && dragFrom !== i ? 'drop' : ''}`}
+            draggable
+            onDragStart={(e) => {
+              setDragFrom(i);
+              e.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setOver(i);
+            }}
+            onDragLeave={() => setOver((o) => (o === i ? null : o))}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragFrom !== null) onChange(moveItem(ids, dragFrom, i));
+              setDragFrom(null);
+              setOver(null);
+            }}
+            onDragEnd={() => {
+              setDragFrom(null);
+              setOver(null);
+            }}
+          >
+            <span className="slot-grip" aria-hidden="true">
+              <Icon name="grip" size={14} />
+            </span>
+            <span className="slot-swatch" style={{ background: colors[i] }} />
+            <div className="slot-body">
+              <div className="slot-title">
+                {r?.label ? <RunLabel label={r.label} /> : <span className="slot-name">{r ? fmtShortDate(r.started_at, true) : shortId(id)}</span>}
+                {r && <span className={`status-dot ${r.status}`} title={r.status} />}
+              </div>
+              <div className="slot-sub">
+                {r ? (
+                  <>
+                    <Link to={`/runs/${id}`}>{r.test_name}</Link>
+                    {r.label ? ` · ${fmtShortDate(r.started_at, true)}` : ''}
+                  </>
+                ) : (
+                  <span className="mono">{shortId(id)}</span>
+                )}
+              </div>
+            </div>
+            <div className="slot-actions">
+              {i === 0 ? (
+                <span className="ref-badge">Reference</span>
+              ) : (
+                <button className="btn sm ghost" onClick={() => onChange(moveItem(ids, i, 0))} title="Compare the other runs against this one">
+                  Make reference
+                </button>
+              )}
+              <button className="btn ghost icon sm" aria-label="Remove run" title="Remove" onClick={() => onChange(ids.filter((x) => x !== id))}>
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          </div>
+        );
+      })}
+      {ids.length < MAX_COMPARE && (
+        <div className="picker-anchor">
+          <button className="run-slot add" onClick={() => setPicking((p) => !p)}>
+            <Icon name="plus" size={14} /> Add run
+          </button>
+          {picking && (
+            <RunPicker
+              runs={candidates}
+              loading={loadingCandidates}
+              onPick={(id) => {
+                onChange([...ids, id]);
+                if (ids.length + 1 >= MAX_COMPARE) setPicking(false);
+              }}
+              onClose={() => setPicking(false)}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RunPicker({
+  runs,
+  loading,
+  onPick,
+  onClose,
+}: {
+  runs: Run[];
+  loading: boolean;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node) && !(e.target as HTMLElement).closest('.run-slot.add')) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+  const needle = q.trim().toLowerCase();
+  const filtered = runs.filter(
+    (r) =>
+      !needle ||
+      r.test_name.toLowerCase().includes(needle) ||
+      (r.label ?? '').toLowerCase().includes(needle) ||
+      r.id.toLowerCase().includes(needle) ||
+      r.status.includes(needle),
+  );
+  const groups = new Map<string, Run[]>();
+  for (const r of filtered) groups.set(r.test_name, [...(groups.get(r.test_name) ?? []), r]);
+  return (
+    <div className="run-picker" ref={ref} role="dialog" aria-label="Add a run">
+      <div className="rp-search">
+        <Icon name="search" size={14} />
+        <input autoFocus placeholder="Search test, label, status or id…" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+      <div className="rp-list">
+        {loading ? (
+          <Loading />
+        ) : groups.size === 0 ? (
+          <div className="empty" style={{ padding: 20 }}>
+            No matching finished runs.
+          </div>
+        ) : (
+          [...groups.entries()]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([test, list]) => (
+              <div key={test}>
+                <div className="rp-group">{test}</div>
+                {list.map((r) => (
+                  <button key={r.id} className="rp-item" onClick={() => onPick(r.id)}>
+                    <span className="rp-label">{r.label ? <RunLabel label={r.label} /> : <span className="muted">no label</span>}</span>
+                    <span className="text-2 num">{fmtDateTime(r.started_at)}</span>
+                    <StatusBadge status={r.status} />
+                    <span className="num muted rp-p95">{r.summary ? `p95 ${fmtMs(r.summary.p95_ms)}` : ''}</span>
+                  </button>
+                ))}
+              </div>
+            ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- summary matrix ----------
+
+const MATRIX: { key: string; extra?: (s: Summary) => string }[] = [
+  { key: 'rps' },
+  { key: 'error_rate' },
+  { key: 'p50_ms' },
+  { key: 'p90_ms' },
+  { key: 'p95_ms' },
+  { key: 'p99_ms' },
+  { key: 'max_ms' },
+  { key: 'mean_ms' },
+];
+
+function RunHead({ r, i, color }: { r: RunReport; i: number; color: string }) {
+  return (
+    <div className="mx-head">
+      <div className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+        <span className="slot-swatch sm" style={{ background: color }} />
+        <Link to={`/runs/${r.run.id}`} className="mx-name">
+          {runName(r.run)}
+        </Link>
+      </div>
+      <div className="mx-sub">
+        {i === 0 ? <span className="ref-badge sm">Reference</span> : null} {r.run.test_name}
+      </div>
+    </div>
+  );
+}
+
+function SummaryMatrix({ res, colors }: { res: CompareResult; colors: string[] }) {
+  const runs = res.runs;
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h2>Summary</h2>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {windowLabel(runs[0].window)} window
+        </span>
+      </div>
+      <div className="table-wrap">
+        <table className="t matrix">
+          <thead>
+            <tr>
+              <th style={{ width: 140 }}>Metric</th>
+              {runs.map((r, i) => (
+                <th key={r.run.id} className="num">
+                  <RunHead r={r} i={i} color={colors[i]} />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="mx-verdict">
+              <td className="text-2">Verdict</td>
+              {runs.map((r, i) => (
+                <td key={r.run.id} className="num">
+                  {i === 0 ? <span className="muted">reference</span> : <OverallBadge c={res.comparisons[i - 1]} />}
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <td className="text-2">Status · window</td>
+              {runs.map((r) => (
+                <td key={r.run.id} className="num">
+                  <span className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+                    <StatusBadge status={r.run.status} />
+                    <span className="muted num" style={{ fontSize: 11.5 }}>
+                      {windowLabel(r.window).replace(/^.*· /, '')}
+                    </span>
+                  </span>
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <td className="text-2">Requests</td>
+              {runs.map((r) => (
+                <td key={r.run.id} className="num">
+                  {fmtInt(r.summary.requests)}
+                </td>
+              ))}
+            </tr>
+            {MATRIX.map((m) => (
+              <tr key={m.key}>
+                <td style={{ fontWeight: 600 }}>{metricInfo(m.key).label}</td>
+                {runs.map((r, i) => {
+                  const v = r.summary[m.key as keyof Summary] as number;
+                  const d = i > 0 ? (res.comparisons[i - 1]?.metrics ?? []).find((x) => x.metric === m.key) : undefined;
+                  return (
+                    <td key={r.run.id} className={`num mx-cell ${d ? verdictTone(d.verdict) : ''}`}>
+                      <span className="mx-v">{fmtMetric(m.key, v)}</span>
+                      {i > 0 && (
+                        <span className="mx-d">
+                          <DeltaText d={d} />
+                        </span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------- per step ----------
+
+function StepCompare({ res, colors }: { res: CompareResult; colors: string[] }) {
+  const steps = useMemo(() => {
+    const names: string[] = [];
+    for (const r of res.runs) for (const n of Object.keys(r.summary.by_step ?? {})) if (!names.includes(n)) names.push(n);
+    return names;
+  }, [res]);
+  const [step, setStep] = useState('');
+  const cur = steps.includes(step) ? step : steps[0] ?? '';
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h2>Per step</h2>
+        <span className="spacer" />
+        {steps.length > 1 && (
+          <div className="segmented" role="group" aria-label="Step">
+            {steps.slice(0, 8).map((n) => (
+              <button key={n} className={n === cur ? 'on' : ''} onClick={() => setStep(n)}>
+                {n}
+              </button>
+            ))}
+          </div>
+        )}
+        {steps.length > 8 && (
+          <select className="input" style={{ width: 200 }} value={cur} onChange={(e) => setStep(e.target.value)}>
+            {steps.map((n) => (
+              <option key={n}>{n}</option>
+            ))}
+          </select>
+        )}
+      </div>
+      {!cur ? (
+        <div className="empty">No per-step data.</div>
+      ) : (
+        <div className="table-wrap">
+          <table className="t matrix compact">
+            <thead>
+              <tr>
+                <th style={{ width: 140 }}>{cur}</th>
+                {res.runs.map((r, i) => (
+                  <th key={r.run.id} className="num">
+                    <RunHead r={r} i={i} color={colors[i]} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="text-2">Requests</td>
+                {res.runs.map((r) => (
+                  <td key={r.run.id} className="num">
+                    {fmtInt(r.summary.by_step?.[cur]?.requests)}
+                  </td>
+                ))}
+              </tr>
+              {METRIC_ORDER.map((m) => (
+                <tr key={m}>
+                  <td style={{ fontWeight: 600 }}>{metricInfo(m).label}</td>
+                  {res.runs.map((r, i) => {
+                    const st = r.summary.by_step?.[cur];
+                    const d = i > 0 ? (res.comparisons[i - 1]?.by_step?.[cur] ?? []).find((x) => x.metric === m) : undefined;
+                    return (
+                      <td key={r.run.id} className={`num mx-cell ${d ? verdictTone(d.verdict) : ''}`}>
+                        <span className="mx-v">{st ? fmtMetric(m, st[m]) : '—'}</span>
+                        {i > 0 && (
+                          <span className="mx-d">
+                            {st ? <DeltaText d={d} /> : <span className="delta same">not in run</span>}
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }

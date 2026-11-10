@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { APIError, api } from '../api/client';
-import type { Test } from '../api/types';
+import type { StartRunRequest, Test } from '../api/types';
 import { useAsync } from '../lib/hooks';
 import { idleRemoteCount, remoteWorkers } from '../lib/workers';
 import { fmtSeconds } from '../lib/format';
@@ -13,6 +13,8 @@ import { ErrorAlert, Icon, Modal } from './ui';
 export function RunStartDialog({ test, onClose }: { test: Test; onClose: () => void }) {
   const nav = useNavigate();
   const [workers, setWorkers] = useState('1');
+  const [label, setLabel] = useState('');
+  const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [full, setFull] = useState<Test>(test);
@@ -39,7 +41,10 @@ export function RunStartDialog({ test, onClose }: { test: Test; onClose: () => v
     setBusy(true);
     setError(null);
     try {
-      const run = await api.startRun(test.id, { workers: n });
+      const req: StartRunRequest = { workers: n };
+      if (label.trim()) req.label = label.trim();
+      if (notes.trim()) req.notes = notes;
+      const run = await api.startRun(test.id, req);
       nav(`/runs/${run.id}`);
     } catch (e) {
       setError(e);
@@ -114,6 +119,35 @@ export function RunStartDialog({ test, onClose }: { test: Test; onClose: () => v
           </div>
           <div className="grow" style={{ minWidth: 0, paddingTop: 20 }}>
             <WorkerHint loading={fleet.loading && !fleet.data} n={workersValid ? n : 1} idle={idle} connected={connected} />
+          </div>
+        </div>
+        <div className="row" style={{ gap: 14, alignItems: 'flex-start' }}>
+          <div className="field" style={{ width: 160, flex: 'none' }}>
+            <label htmlFor="run-label">
+              Label <span className="label-opt">optional</span>
+            </label>
+            <input
+              id="run-label"
+              className="input mono"
+              placeholder="e.g. v1.4.2"
+              maxLength={100}
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+            />
+          </div>
+          <div className="field grow">
+            <label htmlFor="run-notes">
+              Notes <span className="label-opt">optional</span>
+            </label>
+            <textarea
+              id="run-notes"
+              className="input"
+              rows={2}
+              maxLength={10000}
+              placeholder="What changed in this build or environment"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
           </div>
         </div>
         {notEnough ? (

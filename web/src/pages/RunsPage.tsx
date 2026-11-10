@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
-import { ErrorAlert, Loading, StatusBadge } from '../components/ui';
+import { RunLabel } from '../components/report';
+import { ErrorAlert, Icon, Loading, StatusBadge } from '../components/ui';
 import { fmtDateTime, fmtInt, fmtMs, fmtPct, fmtRps, fmtSeconds, runDurationS, shortId, timeAgo } from '../lib/format';
 import { useAsync, useNow } from '../lib/hooks';
 
@@ -8,10 +10,21 @@ export function RunsPage() {
   const [params, setParams] = useSearchParams();
   const nav = useNavigate();
   const testId = params.get('test') ?? '';
+  const labelQ = params.get('label') ?? '';
   const tests = useAsync(() => api.listTests(), []);
   const runs = useAsync(() => api.listRuns({ testId: testId || undefined, limit: 200 }), [testId], 5000);
   const now = useNow(5000);
-  const list = runs.data ?? [];
+  const all = runs.data ?? [];
+  const list = useMemo(() => {
+    const q = labelQ.trim().toLowerCase();
+    return q ? all.filter((r) => (r.label ?? '').toLowerCase().includes(q)) : all;
+  }, [all, labelQ]);
+  const setParam = (k: string, v: string) => {
+    const next = new URLSearchParams(params);
+    if (v) next.set(k, v);
+    else next.delete(k);
+    setParams(next, { replace: k === 'label' });
+  };
 
   return (
     <>
@@ -21,6 +34,16 @@ export function RunsPage() {
           <div className="page-sub">Execution history, newest first</div>
         </div>
         <span className="spacer" />
+        <div className="search-input">
+          <Icon name="search" size={14} />
+          <input
+            className="input"
+            placeholder="Filter by label…"
+            aria-label="Filter by label"
+            value={labelQ}
+            onChange={(e) => setParam('label', e.target.value)}
+          />
+        </div>
         <label className="label" htmlFor="test-filter" style={{ margin: 0 }}>
           Test
         </label>
@@ -29,10 +52,7 @@ export function RunsPage() {
           className="input"
           style={{ width: 220 }}
           value={testId}
-          onChange={(e) => {
-            const v = e.target.value;
-            setParams(v ? { test: v } : {});
-          }}
+          onChange={(e) => setParam('test', e.target.value)}
         >
           <option value="">All tests</option>
           {(tests.data ?? []).map((t) => (
@@ -48,6 +68,14 @@ export function RunsPage() {
       <div className="card">
         {runs.loading && !runs.data ? (
           <Loading />
+        ) : list.length === 0 && all.length > 0 ? (
+          <div className="empty">
+            <strong>No runs match</strong>
+            No run label contains “{labelQ}”.{' '}
+            <button className="linklike" onClick={() => setParam('label', '')}>
+              Clear filter
+            </button>
+          </div>
         ) : list.length === 0 ? (
           <div className="empty">
             <strong>No runs yet</strong>
@@ -60,6 +88,7 @@ export function RunsPage() {
                 <tr>
                   <th>Run</th>
                   <th>Test</th>
+                  <th>Label</th>
                   <th>Status</th>
                   <th>Started</th>
                   <th className="num">Duration</th>
@@ -83,6 +112,9 @@ export function RunsPage() {
                         </Link>
                       </td>
                       <td style={{ fontWeight: 600 }}>{r.test_name}</td>
+                      <td title={r.notes || undefined}>
+                        {r.label ? <RunLabel label={r.label} /> : <span className="muted">—</span>}
+                      </td>
                       <td>
                         <StatusBadge status={r.status} />
                       </td>
@@ -100,7 +132,7 @@ export function RunsPage() {
                         {s && (
                           <Link
                             className="btn sm ghost"
-                            to={`/compare?b=${r.id}`}
+                            to={`/compare?runs=${r.id}`}
                             onClick={(e) => e.stopPropagation()}
                           >
                             Compare

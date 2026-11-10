@@ -1,14 +1,20 @@
 import type {
   APIErrorBody,
+  CompareResult,
   ErrorSample,
   Health,
   MetricPoint,
+  Overview,
   Run,
+  RunReport,
   StartRunRequest,
   Test,
+  TrendPoint,
+  UpdateRunRequest,
   ValidateResult,
   Worker,
 } from './types';
+import { windowParams, type WindowSel } from '../lib/report';
 
 export const TOKEN_KEY = 'goload.token';
 
@@ -162,7 +168,100 @@ export const api = {
     request<ErrorSample[] | null>('GET', `/api/runs/${enc(id)}/errors`).then((r) => r ?? []),
 
   listWorkers: () => request<Worker[] | null>('GET', '/api/workers').then((r) => r ?? []),
+
+  // ---------- reporting ----------
+  updateRun: (id: string, req: UpdateRunRequest) => request<Run>('PATCH', `/api/runs/${enc(id)}`, req),
+  deleteRun: (id: string) => request<void>('DELETE', `/api/runs/${enc(id)}`),
+  runReport: (id: string, w: WindowSel) =>
+    request<RunReport>('GET', `/api/runs/${enc(id)}/report?${windowParams(w).toString()}`),
+  compare: (ids: string[], w: WindowSel, tolerance?: number) => {
+    const q = windowParams(w);
+    q.set('runs', ids.join(','));
+    if (tolerance !== undefined && Number.isFinite(tolerance)) q.set('tolerance', String(tolerance));
+    return request<CompareResult>('GET', `/api/compare?${q.toString()}`);
+  },
+  trend: (testId: string, opts: { limit?: number; window?: WindowSel } = {}) => {
+    const q = opts.window ? windowParams(opts.window) : new URLSearchParams();
+    if (opts.limit) q.set('limit', String(opts.limit));
+    return request<TrendPoint[] | null>('GET', `/api/tests/${enc(testId)}/trend?${q.toString()}`).then((r) => r ?? []);
+  },
+  /** Sets the test's baseline run ("" clears it). */
+  setBaseline: (testId: string, runId: string) =>
+    request<Test>('PUT', `/api/tests/${enc(testId)}/baseline`, { run_id: runId }),
+  overview: (days = 30) => request<Overview>('GET', `/api/reports/overview?days=${days}`),
 };
+
+// ---------- downloads ----------
+
+/** URLs of the run export endpoints (no auth: use `download` to fetch them). */
+export const exportUrls = {
+  html: (id: string, w?: WindowSel) =>
+    `/api/runs/${enc(id)}/report.html${w ? `?${windowParams(w).toString()}` : ''}`,
+  csv: (id: string) => `/api/runs/${enc(id)}/export.csv`,
+  json: (id: string) => `/api/runs/${enc(id)}/export.json`,
+};
+
+function filenameFrom(res: Response, fallback: string): string {
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const star = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(cd);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].trim());
+    } catch {
+      /* fall through */
+    }
+  }
+  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(cd);
+  return plain ? plain[1].trim() : fallback;
+}
+
+/** Saves a Blob under `filename` through a temporary object URL. */
+export function saveBlob(blob: Blob, filename: string): void {
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(href), 10_000);
+}
+
+/**
+ * Downloads an API file. Without a stored token a plain link is enough; with
+ * one the file is fetched with the Authorization header (a link cannot send
+ * headers) and saved via a Blob.
+ */
+export async function download(url: string, fallbackName: string): Promise<void> {
+  const t = getToken();
+  if (!t) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fallbackName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return;
+  }
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: authHeaders() });
+  } catch (e) {
+    throw new APIError(0, `Network error: ${(e as Error).message}`);
+  }
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const b = (await res.json()) as Partial<APIErrorBody>;
+      if (b && typeof b.error === 'string') msg = b.error;
+    } catch {
+      /* non-JSON */
+    }
+    if (res.status === 401) notifyUnauthorized();
+    throw new APIError(res.status, msg);
+  }
+  saveBlob(await res.blob(), filenameFrom(res, fallbackName));
+}
 
 export interface RunStreamHandlers {
   onMetric?: (p: MetricPoint) => void;

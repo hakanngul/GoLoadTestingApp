@@ -248,9 +248,10 @@ function genPoint(run, meta, t, opts = {}) {
   errRate = Math.max(0, Math.min(1, errRate));
   const requests = Math.max(0, Math.round(rps));
   const errors = Math.round(requests * errRate);
-  const p50 = p.p50 * factor * noise(0.06);
-  const p95 = Math.max(p50 * 1.6, p.p95 * factor * noise(0.08));
-  const p99 = Math.max(p95 * 1.2, p.p99 * factor * noise(0.12));
+  const lm = opts.latMult ?? 1; // release-to-release latency drift
+  const p50 = p.p50 * factor * lm * noise(0.06);
+  const p95 = Math.max(p50 * 1.6, p.p95 * factor * lm * noise(0.08));
+  const p99 = Math.max(p95 * 1.2, p.p99 * factor * lm * noise(0.12));
   const active = Math.round(meta.model === 'closed' ? target : (rps * p.p50 * factor) / 1000 + rand() * 3);
   const dropped = meta.model === 'open' && active > meta.maxVus ? Math.round((active - meta.maxVus) * 0.8) : 0;
   return {
@@ -381,6 +382,8 @@ function finishedRun(testId, agoH, opts = {}) {
     thresholds: [],
     peak_cpu: 0,
     warnings: [],
+    label: opts.label ?? '',
+    notes: opts.notes ?? '',
   };
   const total = opts.stopAt ?? meta.total;
   const pts = [];
@@ -404,16 +407,55 @@ function finishedRun(testId, agoH, opts = {}) {
   return run;
 }
 
-// Historical runs (oldest first so ids/times line up).
-finishedRun('t_9c1e44a0', 170);
-finishedRun('t_27d5b9f8', 150);
-finishedRun('t_4b7f02d3', 120);
-finishedRun('t_e81a6c57', 96, { degrade: 1.0 });
-finishedRun('t_27d5b9f8', 72, { degrade: 1.08 });
-finishedRun('t_e81a6c57', 50, { degrade: 1.45, errBurst: [92, 104] }); // failed: errors during spike
-finishedRun('t_4b7f02d3', 30, { stopAt: 74 });
-finishedRun('t_9c1e44a0', 26);
-finishedRun('t_27d5b9f8', 20, { degrade: 0.96 });
+// Historical runs: ~30 days of labelled releases. catalog-soak has a baseline
+// (v1.2.0) and a recent release candidate that regressed p95 by ~25%;
+// login-flow has a baseline and improved; orders-api has no baseline.
+const D = 24; // hours
+const baselines = {};
+function history(testId, specs) {
+  for (const sp of specs) {
+    const r = finishedRun(testId, sp.ago, sp);
+    if (sp.baseline) baselines[testId] = r.id;
+  }
+}
+history('t_27d5b9f8', [
+  { ago: 29 * D + 3, label: 'v1.0.0', notes: 'First capacity check after the catalog rewrite.' },
+  { ago: 25 * D + 5, label: 'v1.0.1', latMult: 1.02 },
+  { ago: 21 * D + 2, label: 'v1.1.0', latMult: 0.96 },
+  { ago: 17 * D + 6, label: 'v1.1.1', latMult: 0.95, workers: 2 },
+  { ago: 12 * D + 1, label: 'v1.2.0', latMult: 0.9, baseline: true, notes: 'New read-through cache. Agreed baseline for the 1.x line.' },
+  { ago: 8 * D + 4, label: 'v1.2.1', latMult: 0.92 },
+  { ago: 4 * D + 2, label: 'v1.3.0', latMult: 0.94, workers: 2 },
+  { ago: 20, label: 'v1.4.0-rc1', latMult: 1.13, errMult: 1.6, notes: 'Switched product detail to the new pricing service.' },
+]);
+history('t_4b7f02d3', [
+  { ago: 28 * D + 2, label: 'v2.3.0' },
+  { ago: 23 * D + 7, label: 'v2.3.1', latMult: 1.04 },
+  { ago: 18 * D + 3, label: 'v2.4.0', latMult: 1.0, baseline: true },
+  { ago: 14 * D + 5, label: 'v2.4.1', stopAt: 74 },
+  { ago: 9 * D + 1, label: 'v2.5.0', latMult: 2.3, errMult: 9, notes: 'Token cache disabled by mistake — see INC-2291.' },
+  { ago: 5 * D + 6, label: 'v2.5.1', latMult: 0.97 },
+  { ago: 30, label: 'v2.6.0', latMult: 0.82, workers: 2 },
+]);
+history('t_5a0c3e19', [
+  { ago: 27 * D, label: 'v0.9.0' },
+  { ago: 22 * D + 4, label: 'v0.9.1', latMult: 0.98 },
+  { ago: 15 * D + 2, label: 'v1.0.0', latMult: 1.05 },
+  { ago: 10 * D + 3, label: 'v1.0.1', latMult: 1.0 },
+  { ago: 6 * D + 1, label: 'v1.1.0', latMult: 1.1 },
+  { ago: 12, label: 'v1.1.1', latMult: 1.03 },
+]);
+history('t_9c1e44a0', [
+  { ago: 19 * D, label: '' },
+  { ago: 7 * D + 2, label: 'nightly' },
+  { ago: 26 },
+  { ago: 2, label: 'nightly' },
+]);
+history('t_e81a6c57', [
+  { ago: 11 * D, degrade: 1.0, label: 'v3.1.0' },
+  { ago: 50, degrade: 1.45, errBurst: [92, 104], label: 'v3.2.0' }, // failed: errors during spike
+]);
+for (const [tid, rid] of Object.entries(baselines)) tests.get(tid).baseline_run_id = rid;
 const errRun = {
   id: 'r_' + hex(10),
   test_id: 't_4b7f02d3',
@@ -421,18 +463,18 @@ const errRun = {
   status: 'error',
   yaml: tests.get('t_4b7f02d3').yaml,
   workers: 1,
-  started_at: iso(now - 6 * 3600e3),
-  finished_at: iso(now - 6 * 3600e3 + 120),
+  started_at: iso(now - (3 * D + 6) * 3600e3),
+  finished_at: iso(now - (3 * D + 6) * 3600e3 + 120),
   thresholds: [],
   peak_cpu: 0.02,
   warnings: [],
   error: 'data: open users.csv: no such file or directory',
+  label: 'v2.5.2',
+  notes: '',
 };
 runs.set(errRun.id, errRun);
 metrics.set(errRun.id, []);
 errorsByRun.set(errRun.id, []);
-finishedRun('t_5a0c3e19', 12);
-finishedRun('t_9c1e44a0', 2);
 
 // ---------------------------------------------------------------- live runs
 const live = new Map(); // runId -> { meta, clients:Set, timer, stopped }
@@ -489,7 +531,7 @@ function finishLive(run) {
 }
 
 // A run that is in progress when the mock boots (started 75s ago).
-function createRun(testId, workers, startedAgoS = 0, queueS = 0) {
+function createRun(testId, workers, startedAgoS = 0, queueS = 0, extra = {}) {
   const t = tests.get(testId);
   const run = {
     id: 'r_' + hex(10),
@@ -502,12 +544,14 @@ function createRun(testId, workers, startedAgoS = 0, queueS = 0) {
     thresholds: [],
     peak_cpu: 0,
     warnings: [],
+    label: String(extra.label ?? '').slice(0, 100),
+    notes: String(extra.notes ?? '').slice(0, 10000),
   };
   runs.set(run.id, run);
   startLive(run, { queueMs: queueS * 1000 });
   return run;
 }
-const liveRun = createRun('t_27d5b9f8', 1, 75);
+const liveRun = createRun('t_27d5b9f8', 1, 75, 0, { label: 'v1.4.0-rc2' });
 console.log(`[mock] live run ${liveRun.id} (catalog-soak) in progress`);
 // A distributed run waiting for spot instances (4 workers wanted, 2 idle).
 const queuedRun = createRun('t_9c1e44a0', 4, 42, 42 + QUEUE_S);
@@ -617,6 +661,160 @@ function validate(yaml) {
   });
   if (errors.length) return { valid: false, errors };
   return { valid: true, errors: [], model: meta.model, duration_s: meta.total, steps: meta.steps.length };
+}
+
+// ---------------------------------------------------------------- reporting
+const FINISHED = new Set(['passed', 'failed', 'stopped', 'error']);
+const METRIC_KEYS = ['p50_ms', 'p90_ms', 'p95_ms', 'p99_ms', 'max_ms', 'mean_ms', 'rps', 'error_rate'];
+const LOWER_BETTER = { rps: false };
+
+// Steady state = without an initial ramp from 0 and a final ramp-down.
+function steadyRange(meta, total) {
+  const st = meta.stages;
+  let from = 0;
+  let to = meta.total || total;
+  if (st.length > 1 && st[0].target > 0) from = st[0].d;
+  if (st.length > 1 && st[st.length - 1].target < st[st.length - 2].target) to -= st[st.length - 1].d;
+  to = Math.min(to, total);
+  return to - from >= 2 ? { from, to } : { from: 0, to: total };
+}
+
+function resolveWindow(run, q) {
+  const meta = scenarioMeta(run.yaml);
+  const pts = metrics.get(run.id) || [];
+  const total = pts.length ? pts[pts.length - 1].elapsed : runSeconds(run);
+  const kind = q.window || 'steady';
+  if (kind === 'full') return { kind, from: 0, to: total };
+  if (kind === 'custom') {
+    const from = Number(q.from);
+    const to = Number(q.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to <= from) return null;
+    return { kind, from, to: Math.min(to, Math.max(total, from + 1)) };
+  }
+  return { kind: 'steady', ...steadyRange(meta, total) };
+}
+
+function runSeconds(run) {
+  const a = Date.parse(run.started_at);
+  const b = run.finished_at ? Date.parse(run.finished_at) : Date.now();
+  return Math.max(0, Math.round((b - a) / 1000));
+}
+
+function windowSummary(run, w) {
+  const meta = scenarioMeta(run.yaml);
+  const pts = (metrics.get(run.id) || []).filter((p) => p.elapsed > w.from && p.elapsed <= w.to);
+  if (!pts.length) return run.summary ? { ...run.summary } : summarize([], meta, run.test_id);
+  return summarize(pts, meta, run.test_id);
+}
+
+function delta(metric, ref, cand, tol) {
+  const absolute = metric === 'error_rate';
+  const lower = LOWER_BETTER[metric] ?? true;
+  if (!absolute && ref === 0) return { metric, reference: ref, candidate: cand, delta: 0, verdict: 'n/a' };
+  const d = absolute ? cand - ref : (cand - ref) / ref;
+  const t = absolute ? tol / 10 : tol;
+  const worse = lower ? d > t : d < -t;
+  const better = lower ? d < -t : d > t;
+  return { metric, reference: ref, candidate: cand, delta: round(d, 6), verdict: worse ? 'worse' : better ? 'better' : 'same' };
+}
+
+function compareSummaries(refId, ref, candId, cand, tol) {
+  const ms = METRIC_KEYS.map((k) => delta(k, ref[k], cand[k], tol));
+  const byStep = {};
+  for (const name of Object.keys(ref.by_step || {})) {
+    const a = ref.by_step[name];
+    const b = cand.by_step?.[name];
+    if (b) byStep[name] = METRIC_KEYS.map((k) => delta(k, a[k], b[k], tol));
+  }
+  return {
+    reference_run_id: refId,
+    candidate_run_id: candId,
+    tolerance: tol,
+    metrics: ms,
+    regression: ms.some((x) => x.verdict === 'worse'),
+    by_step: Object.keys(byStep).length ? byStep : undefined,
+  };
+}
+
+function reportFor(run, q, tol = 0.1, withBaseline = true) {
+  const w = resolveWindow(run, q);
+  if (!w) return null;
+  const meta = scenarioMeta(run.yaml);
+  const summary = run.summary ? windowSummary(run, w) : summarize([], meta, run.test_id);
+  const rep = { run, window: w, summary, thresholds: run.summary ? evalThresholds(meta, summary) : [] };
+  const t = tests.get(run.test_id);
+  const base = t?.baseline_run_id && t.baseline_run_id !== run.id ? runs.get(t.baseline_run_id) : null;
+  if (withBaseline && base?.summary && run.summary) {
+    const bw = resolveWindow(base, q) || resolveWindow(base, { window: 'steady' });
+    rep.baseline = compareSummaries(base.id, windowSummary(base, bw), run.id, summary, tol);
+  }
+  return rep;
+}
+
+const stripSteps = (r) => (r.summary ? { ...r, summary: { ...r.summary, by_step: undefined } } : r);
+
+function overview(days) {
+  const since = now - days * 86400e3;
+  const all = [...runs.values()].sort((a, b) => b.started_at.localeCompare(a.started_at));
+  const inPeriod = all.filter((r) => Date.parse(r.started_at) >= since);
+  const finished = inPeriod.filter((r) => FINISHED.has(r.status));
+  const perDay = new Map();
+  const dayKey = (ms) => new Date(ms).toISOString().slice(0, 10);
+  for (let d = since; d <= Date.now() + 1; d += 86400e3) perDay.set(dayKey(d), { day: dayKey(d), passed: 0, failed: 0, other: 0 });
+  for (const r of inPeriod) {
+    const row = perDay.get(dayKey(Date.parse(r.started_at)));
+    if (!row) continue;
+    if (r.status === 'passed') row.passed++;
+    else if (r.status === 'failed') row.failed++;
+    else row.other++;
+  }
+  const health = [...tests.values()]
+    .map((t) => {
+      const tr = finished.filter((r) => r.test_id === t.id);
+      const latest = all.find((r) => r.test_id === t.id && FINISHED.has(r.status));
+      const h = {
+        test_id: t.id,
+        test_name: t.name,
+        latest_run: latest ? stripSteps(latest) : undefined,
+        pass_rate: tr.length ? round(tr.filter((r) => r.status === 'passed').length / tr.length, 4) : 0,
+        run_count: tr.length,
+      };
+      if (latest) {
+        const rep = reportFor(latest, { window: 'steady' });
+        if (rep?.baseline) h.baseline = { ...rep.baseline, by_step: undefined };
+      }
+      return h;
+    })
+    .filter((h) => h.latest_run)
+    .sort((a, b) => a.test_name.localeCompare(b.test_name));
+  return {
+    since: iso(since),
+    runs: inPeriod.length,
+    passed: inPeriod.filter((r) => r.status === 'passed').length,
+    failed: inPeriod.filter((r) => r.status === 'failed').length,
+    errored: inPeriod.filter((r) => r.status === 'error' || r.status === 'stopped').length,
+    requests: inPeriod.reduce((a, r) => a + (r.summary?.requests || 0), 0),
+    tests: health,
+    recent_runs: inPeriod.slice(0, 10).map(stripSteps),
+    runs_per_day: [...perDay.values()],
+  };
+}
+
+function htmlReport(rep) {
+  const r = rep.run;
+  const s = rep.summary;
+  const row = (k, v) => `<tr><th>${k}</th><td>${v}</td></tr>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${r.test_name} ${r.label || r.id} — GoLoad report</title>
+<style>body{font:14px system-ui,sans-serif;max-width:760px;margin:32px auto;color:#15181e}th{text-align:left;padding:4px 16px 4px 0;color:#4a5160}td{font-variant-numeric:tabular-nums}</style></head>
+<body><h1>${r.test_name} ${r.label ? `· ${r.label}` : ''}</h1><p>Run ${r.id} · ${r.status} · started ${r.started_at} · window ${rep.window.kind} ${rep.window.from}s–${rep.window.to}s</p>
+<p><em>Mock report stub — the real server renders charts and per-step tables.</em></p>
+<table>${row('Requests', s.requests)}${row('RPS', s.rps)}${row('Error rate', (s.error_rate * 100).toFixed(2) + '%')}${row('p50', s.p50_ms + ' ms')}${row('p95', s.p95_ms + ' ms')}${row('p99', s.p99_ms + ' ms')}</table>
+</body></html>`;
+}
+
+function sendFile(res, type, name, body) {
+  res.writeHead(200, { 'Content-Type': type, 'Content-Disposition': `attachment; filename="${name}"` });
+  res.end(body);
 }
 
 // ---------------------------------------------------------------- http
@@ -733,6 +931,42 @@ const server = createServer(async (req, res) => {
           return send(res, 204);
         }
       }
+      if (c === 'baseline' && m === 'PUT') {
+        const body = (await readJSON(req)) || {};
+        const rid = String(body.run_id ?? '');
+        if (rid) {
+          const r = runs.get(rid);
+          if (!r || r.test_id !== t.id) return apiErr(res, 400, 'invalid baseline', [`run_id: run ${rid} is not a run of this test`]);
+          if (!r.summary) return apiErr(res, 400, 'invalid baseline', ['run_id: run has no results']);
+          t.baseline_run_id = rid;
+        } else delete t.baseline_run_id;
+        return send(res, 200, t);
+      }
+      if (c === 'trend' && m === 'GET') {
+        const q = Object.fromEntries(url.searchParams);
+        const limit = Number(q.limit || 30);
+        const list = [...runs.values()]
+          .filter((r) => r.test_id === t.id && FINISHED.has(r.status) && r.summary)
+          .sort((x, y) => x.started_at.localeCompare(y.started_at))
+          .slice(-limit);
+        const out = [];
+        for (const r of list) {
+          const w = resolveWindow(r, q);
+          if (!w) return apiErr(res, 400, 'invalid window');
+          const sm = windowSummary(r, w);
+          delete sm.by_step;
+          out.push({
+            run_id: r.id,
+            started_at: r.started_at,
+            label: r.label || '',
+            status: r.status,
+            workers: r.workers,
+            summary: sm,
+            is_baseline: t.baseline_run_id === r.id,
+          });
+        }
+        return send(res, 200, out);
+      }
       if (c === 'runs' && m === 'POST') {
         const body = (await readJSON(req)) || {};
         if ([...runs.values()].some((r) => (r.status === 'running' || r.status === 'queued') && r.test_id === t.id))
@@ -748,7 +982,7 @@ const server = createServer(async (req, res) => {
           return apiErr(res, 409, 'not enough idle workers', [
             `cluster: not enough idle workers: ${want} requested, ${idle} idle`,
           ]);
-        const run = createRun(t.id, want, 0, want > 1 && want > idle ? LAUNCH_S : 0);
+        const run = createRun(t.id, want, 0, want > 1 && want > idle ? LAUNCH_S : 0, body);
         return send(res, 201, run);
       }
       return apiErr(res, 405, 'method not allowed');
@@ -766,6 +1000,44 @@ const server = createServer(async (req, res) => {
       const run = runs.get(b);
       if (!run) return apiErr(res, 404, `run ${b} not found`);
       if (!c && m === 'GET') return send(res, 200, run);
+      if (!c && m === 'PATCH') {
+        const body = await readJSON(req);
+        if (!body) return apiErr(res, 400, 'invalid JSON');
+        const errs = [];
+        if (typeof body.label === 'string' && body.label.length > 100) errs.push('label: at most 100 characters');
+        if (typeof body.notes === 'string' && body.notes.length > 10000) errs.push('notes: at most 10000 characters');
+        if (errs.length) return apiErr(res, 400, 'invalid run update', errs);
+        if (typeof body.label === 'string') run.label = body.label.trim();
+        if (typeof body.notes === 'string') run.notes = body.notes;
+        return send(res, 200, run);
+      }
+      if (!c && m === 'DELETE') {
+        if (!FINISHED.has(run.status)) return apiErr(res, 409, 'run is still active');
+        runs.delete(run.id);
+        metrics.delete(run.id);
+        errorsByRun.delete(run.id);
+        for (const t of tests.values()) if (t.baseline_run_id === run.id) delete t.baseline_run_id;
+        return send(res, 204);
+      }
+      if (c === 'report' && m === 'GET') {
+        const rep = reportFor(run, Object.fromEntries(url.searchParams));
+        if (!rep) return apiErr(res, 400, 'invalid window', ['window: custom needs 0 <= from < to']);
+        return send(res, 200, rep);
+      }
+      if (c === 'report.html' && m === 'GET') {
+        const rep = reportFor(run, Object.fromEntries(url.searchParams));
+        if (!rep) return apiErr(res, 400, 'invalid window');
+        return sendFile(res, 'text/html; charset=utf-8', `goload-${run.test_name}-${run.id}.html`, htmlReport(rep));
+      }
+      if (c === 'export.csv' && m === 'GET') {
+        const cols = ['t', 'elapsed', 'target', 'active', 'requests', 'errors', 'dropped', 'rps', 'error_rate', 'mean_ms', 'p50_ms', 'p95_ms', 'p99_ms', 'max_ms', 'cpu', 'workers'];
+        const lines = [cols.join(',')].concat((metrics.get(run.id) || []).map((p) => cols.map((k) => p[k]).join(',')));
+        return sendFile(res, 'text/csv; charset=utf-8', `goload-${run.id}-metrics.csv`, lines.join('\n') + '\n');
+      }
+      if (c === 'export.json' && m === 'GET') {
+        const body = JSON.stringify({ run, metrics: metrics.get(run.id) || [], errors: errorsByRun.get(run.id) || [] }, null, 2);
+        return sendFile(res, 'application/json', `goload-${run.id}.json`, body);
+      }
       if (c === 'stop' && m === 'POST') {
         const st = live.get(run.id);
         if (!st) return apiErr(res, 409, 'run is not running');
@@ -799,6 +1071,31 @@ const server = createServer(async (req, res) => {
     }
 
     if (a === 'workers' && m === 'GET') return send(res, 200, workers());
+
+    if (a === 'compare' && m === 'GET') {
+      const ids = (url.searchParams.get('runs') || '').split(',').map((x) => x.trim()).filter(Boolean);
+      if (ids.length < 2 || ids.length > 6) return apiErr(res, 400, 'invalid compare', ['runs: between 2 and 6 run ids']);
+      const tolRaw = url.searchParams.get('tolerance');
+      const tol = tolRaw === null || tolRaw === '' ? 0.1 : Number(tolRaw);
+      if (!Number.isFinite(tol) || tol < 0 || tol > 1) return apiErr(res, 400, 'invalid compare', ['tolerance: must be 0..1']);
+      const q = Object.fromEntries(url.searchParams);
+      const reps = [];
+      for (const id of ids) {
+        const r = runs.get(id);
+        if (!r) return apiErr(res, 404, `run ${id} not found`);
+        if (!FINISHED.has(r.status)) return apiErr(res, 409, `run ${id} is still active`);
+        const rep = reportFor(r, q, tol, false);
+        if (!rep) return apiErr(res, 400, 'invalid window');
+        reps.push(rep);
+      }
+      const comparisons = reps.slice(1).map((c2) => compareSummaries(reps[0].run.id, reps[0].summary, c2.run.id, c2.summary, tol));
+      return send(res, 200, { runs: reps, comparisons });
+    }
+
+    if (a === 'reports' && b === 'overview' && m === 'GET') {
+      const days = Math.max(1, Math.min(365, Number(url.searchParams.get('days') || 30) || 30));
+      return send(res, 200, overview(days));
+    }
     return apiErr(res, 404, 'not found');
   } catch (e) {
     console.error(e);

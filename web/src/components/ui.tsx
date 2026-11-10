@@ -50,6 +50,30 @@ const paths: Record<string, ReactNode> = {
     </>
   ),
   cloud: <path d="M4.5 12.5h7a3 3 0 00.4-5.97A4 4 0 004.3 6.6 3 3 0 004.5 12.5z" />,
+  reports: (
+    <>
+      <path d="M2.5 13.5h11" />
+      <path d="M4.5 11V8M8 11V4.5M11.5 11V6.5" />
+    </>
+  ),
+  download: <path d="M8 2.5v8M4.5 7L8 10.5 11.5 7M3 13.5h10" />,
+  print: (
+    <>
+      <path d="M4.5 6V2.5h7V6" />
+      <rect x="2.5" y="6" width="11" height="5" rx="1" />
+      <path d="M4.5 9.5h7v4h-7z" />
+    </>
+  ),
+  chevron: <path d="M4.5 6.5L8 10l3.5-3.5" />,
+  flag: <path d="M3.5 14V2.5M3.5 3h8l-2 3 2 3h-8" />,
+  grip: <path d="M6 4h.01M10 4h.01M6 8h.01M10 8h.01M6 12h.01M10 12h.01" strokeWidth="2.2" />,
+  search: (
+    <>
+      <circle cx="7" cy="7" r="4" />
+      <path d="M10 10l3.5 3.5" />
+    </>
+  ),
+  external: <path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5M11.5 9.5v4h-9v-9h4" />,
 };
 
 export function Icon({ name, size = 16 }: { name: keyof typeof paths | string; size?: number }) {

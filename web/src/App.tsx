@@ -13,6 +13,8 @@ const TestEditorPage = lazy(() => import('./pages/TestEditorPage').then((m) => (
 const RunsPage = lazy(() => import('./pages/RunsPage').then((m) => ({ default: m.RunsPage })));
 const RunPage = lazy(() => import('./pages/RunPage').then((m) => ({ default: m.RunPage })));
 const ComparePage = lazy(() => import('./pages/ComparePage').then((m) => ({ default: m.ComparePage })));
+const ReportsPage = lazy(() => import('./pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
+const TestReportPage = lazy(() => import('./pages/TestReportPage').then((m) => ({ default: m.TestReportPage })));
 const WorkersPage = lazy(() => import('./pages/WorkersPage').then((m) => ({ default: m.WorkersPage })));
 
 /**
@@ -48,7 +50,7 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
   const up = health.data?.status === 'ok';
   return (
     <div className="app">
-      <aside className="sidebar">
+      <aside className="sidebar no-print">
         <div className="sidebar-inner">
           <div className="brand">
             <BrandMark />
@@ -60,6 +62,9 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             </NavLink>
             <NavLink to="/runs">
               <Icon name="runs" /> Runs
+            </NavLink>
+            <NavLink to="/reports">
+              <Icon name="reports" /> Reports
             </NavLink>
             <NavLink to="/compare">
               <Icon name="compare" /> Compare
@@ -89,6 +94,8 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             <Route path="/tests/:id" element={<TestEditorPage />} />
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/runs/:id" element={<RunPage />} />
+            <Route path="/reports" element={<ReportsPage />} />
+            <Route path="/reports/tests/:id" element={<TestReportPage />} />
             <Route path="/compare" element={<ComparePage />} />
             <Route path="/workers" element={<WorkersPage />} />
             <Route path="*" element={<NotFound />} />
