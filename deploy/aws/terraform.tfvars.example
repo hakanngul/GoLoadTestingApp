@@ -1,0 +1,18 @@
+region            = "eu-central-1"
+vpc_id            = "vpc-0123456789abcdef0"
+master_subnet_id  = "subnet-0aaaaaaaaaaaaaaaa"
+worker_subnet_ids = ["subnet-0aaaaaaaaaaaaaaaa", "subnet-0bbbbbbbbbbbbbbbb", "subnet-0cccccccccccccccc"]
+admin_cidrs       = ["203.0.113.10/32"]
+
+image              = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/goloadtest:v0.4.0"
+ecr_repository_arn = "arn:aws:ecr:eu-central-1:123456789012:repository/goloadtest"
+
+# Optional
+# master_instance_type  = "t3.small"
+# worker_instance_types = ["c7i.large", "c6i.large", "c5.large"]
+# spot_only             = false
+# worker_egress_cidrs   = ["198.51.100.0/24"] # allowlisted target ranges only
+tags = {
+  project = "goload"
+  owner   = "perf-team"
+}

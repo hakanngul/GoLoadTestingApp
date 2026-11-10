@@ -1,0 +1,113 @@
+#!/bin/bash
+# goload master bootstrap (Amazon Linux 2023). Rendered by Terraform.
+# Installs Docker + Compose, fetches secrets from SSM and starts master +
+# PostgreSQL. Logs: /var/log/cloud-init-output.log (secrets are never echoed).
+set -euo pipefail
+
+REGION="${region}"
+APP_DIR=/opt/goload
+
+# --- Docker + Compose plugin
+dnf install -y docker
+systemctl enable --now docker
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL -o /usr/local/lib/docker/cli-plugins/docker-compose \
+  "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-${compose_arch}"
+chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose
+docker compose version
+
+%{ if ecr_registry != "" ~}
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "${ecr_registry}"
+%{ endif ~}
+
+# --- own private IP (IMDSv2) -> address workers dial
+IMDS_TOKEN=$(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+PRIVATE_IP=$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
+
+param() {
+  aws ssm get-parameter --region "$REGION" --with-decryption --name "$1" --query Parameter.Value --output text
+}
+
+install -d -m 0700 "$APP_DIR"
+umask 077
+{
+  echo "POSTGRES_PASSWORD=$(param '${db_password_param}')"
+  echo "GOLOAD_TOKEN=$(param '${api_token_param}')"
+  echo "GOLOAD_WORKER_TOKEN=$(param '${worker_token_param}')"
+  echo "GOLOAD_IMAGE=${image}"
+  echo "GOLOAD_PROVISIONER=aws"
+  echo "GOLOAD_MASTER_ADVERTISE_ADDR=$PRIVATE_IP:${grpc_port}"
+  echo "GOLOAD_WORKER_IMAGE=${image}"
+  echo "GOLOAD_AWS_REGION=$REGION"
+  echo "GOLOAD_AWS_LAUNCH_TEMPLATE_ID=${launch_template_id}"
+  echo "GOLOAD_AWS_SUBNET_IDS=${worker_subnet_ids}"
+  echo "GOLOAD_AWS_INSTANCE_TYPES=${worker_instance_types}"
+  echo "GOLOAD_AWS_SPOT_ONLY=${spot_only}"
+  echo "GOLOAD_AWS_MAX_PRICE=${spot_max_price}"
+} > "$APP_DIR/.env"
+chmod 0600 "$APP_DIR/.env"
+
+# Same services as the repository's docker-compose.yml, minus the build step.
+cat > "$APP_DIR/docker-compose.yml" <<'COMPOSE'
+name: goload
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: goload
+      POSTGRES_DB: goload
+      POSTGRES_PASSWORD: $${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goload -d goload"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+  master:
+    image: $${GOLOAD_IMAGE}
+    restart: unless-stopped
+    command: ["serve"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      GOLOAD_ADDR: ":${http_port}"
+      GOLOAD_DB: postgres://goload:$${POSTGRES_PASSWORD}@postgres:5432/goload?sslmode=disable
+    ports:
+      - "${http_port}:${http_port}"
+      - "${grpc_port}:${grpc_port}"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+volumes:
+  pgdata:
+COMPOSE
+
+cd "$APP_DIR"
+docker compose pull
+docker compose up -d
+
+# Bring the stack back after a reboot.
+cat > /etc/systemd/system/goload.service <<'UNIT'
+[Unit]
+Description=goload master (docker compose)
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/goload
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable goload.service
