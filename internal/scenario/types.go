@@ -12,6 +12,7 @@ type Scenario struct {
 	Target     Target      `yaml:"target"`
 	Load       Load        `yaml:"load"`
 	Data       *Data       `yaml:"data,omitempty"`
+	Auth       *Auth       `yaml:"auth,omitempty"`
 	Steps      []Step      `yaml:"steps"`
 	Thresholds []Threshold `yaml:"thresholds,omitempty"`
 }
@@ -188,3 +189,80 @@ type Threshold struct {
 // Duration is a time.Duration that unmarshals from YAML strings like "30s".
 // UnmarshalYAML / MarshalYAML are implemented in duration.go.
 type Duration struct{ time.Duration }
+
+// AuthType selects how iterations authenticate.
+type AuthType string
+
+const (
+	// AuthLogin performs Auth.Login (an HTTP request) to obtain a token,
+	// caches the extracted variables and reuses them across iterations.
+	AuthLogin AuthType = "login"
+	// AuthBearer sends a fixed token (may be a {{var}} from CSV data).
+	AuthBearer AuthType = "bearer"
+	// AuthBasic sends HTTP Basic credentials (may be {{var}}s).
+	AuthBasic AuthType = "basic"
+)
+
+// AuthScope controls how login results are shared (AuthLogin only).
+type AuthScope string
+
+const (
+	// AuthPerUser (default) caches one login per distinct credentials,
+	// i.e. per rendered login request (typically one per CSV row).
+	AuthPerUser AuthScope = "per_user"
+	// AuthShared logs in once per load generator and shares the result
+	// with every iteration (one service account).
+	AuthShared AuthScope = "shared"
+)
+
+// Auth authenticates iterations without making login part of every
+// iteration. Example:
+//
+//	auth:
+//	  type: login
+//	  scope: per_user          # or shared
+//	  refresh: 10m             # re-login after this age (0 = never)
+//	  login:                   # a normal HTTP step; needs >= 1 extract
+//	    method: POST
+//	    path: /api/login
+//	    headers: {Content-Type: application/json}
+//	    body: '{"username":"{{username}}","password":"{{password}}"}'
+//	    extract:
+//	      - {var: token, from: json, expr: data.access_token}
+//	  header: Authorization    # default Authorization
+//	  value: Bearer {{token}}  # default "Bearer {{token}}" (login/bearer)
+//
+//	auth: {type: bearer, token: "{{api_key}}"}
+//	auth: {type: basic, username: "{{user}}", password: "{{pass}}"}
+//
+// Semantics:
+//   - The header is added to every HTTP step and WebSocket handshake; a
+//     step that sets the same header itself wins. Set inject: false to
+//     only expose the extracted variables (use them in your own headers).
+//   - Extracted login variables are available to every step as {{var}}.
+//   - Login requests are reported as step "auth:login" (so failures and
+//     latency are visible) and count in run totals; with caching they are
+//     a small fraction of traffic.
+//   - A failed login fails the iteration (reported as auth:login) and is
+//     retried on the next iteration for the same credentials.
+//   - When a step answers 401, the cached login for those credentials is
+//     dropped and the next iteration logs in again.
+//   - Caches are per load generator (each distributed worker logs in on
+//     its own).
+type Auth struct {
+	Type    AuthType  `yaml:"type"`
+	Scope   AuthScope `yaml:"scope,omitempty"`   // login only; default per_user
+	Refresh Duration  `yaml:"refresh,omitempty"` // login only; 0 = never
+	Login   *Step     `yaml:"login,omitempty"`   // login only; HTTP step
+	Token   string    `yaml:"token,omitempty"`   // bearer only
+	// Username and Password are used by basic auth.
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
+	// Header and Value define the injected header. Defaults: Authorization
+	// and "Bearer {{token}}" (login), "Bearer <token>" (bearer),
+	// "Basic base64(user:pass)" (basic; Value must be empty).
+	Header string `yaml:"header,omitempty"`
+	Value  string `yaml:"value,omitempty"`
+	// Inject: nil/true adds the header to every step; false disables it.
+	Inject *bool `yaml:"inject,omitempty"`
+}
