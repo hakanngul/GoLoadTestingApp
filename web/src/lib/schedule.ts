@@ -376,7 +376,8 @@ export function describeLoad(l: LoadOverride | undefined): string {
   if (!l) return 'Scenario load';
   const peak = l.users ? `${l.users} VUs` : `${l.rate ?? 0} it/s`;
   if (l.mode === 'scale') return `Peak ${peak} (scaled)`;
-  const parts = [`ramp ${fmtGoDuration(l.ramp_up_ms)}`, `hold ${fmtGoDuration(l.hold_ms)}`];
+  // ramp_up 0 runs as a 1 s ramp (stage durations must be > 0), so show that.
+  const parts = [`ramp ${fmtGoDuration(l.ramp_up_ms || 1000)}`, `hold ${fmtGoDuration(l.hold_ms)}`];
   if (l.ramp_down_ms) parts.push(`down ${fmtGoDuration(l.ramp_down_ms)}`);
   return `${peak} · ${parts.join(', ')}`;
 }
