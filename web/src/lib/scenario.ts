@@ -346,5 +346,5 @@ export function summarizeYaml(text: string): {
 }
 
 export function unitFor(model: LoadModel): string {
-  return model === 'closed' ? 'VUs' : 'rps';
+  return model === 'closed' ? 'VUs' : 'it/s';
 }

@@ -24,7 +24,7 @@ export function RunStartDialog({ test, onClose }: { test: Test; onClose: () => v
 
   const sum = summarizeYaml(full.yaml);
   const profile = sum ? stagesToProfile(sum.stages) : null;
-  const unit = sum ? unitFor(sum.model) : 'rps';
+  const unit = sum ? unitFor(sum.model) : 'it/s';
   const n = Number(workers);
   const workersValid = Number.isInteger(n) && n >= 1 && n <= 64;
 

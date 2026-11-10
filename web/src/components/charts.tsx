@@ -234,7 +234,7 @@ export function RunCharts({
   const rpsSeries = s.rps.map((x) => (x.key === 'target' ? { ...x, label: `Target (${targetUnit})` } : x));
   return (
     <div className="stack" style={{ gap: 12 }}>
-      <ChartCard title="Throughput — requests/s vs target" series={rpsSeries}>
+      <ChartCard title="Throughput — requests/s · target in iterations/s" series={rpsSeries}>
         <TimeSeriesChart data={data} series={rpsSeries} fmt={fmtRps} xMax={xMax} height={230} />
       </ChartCard>
       <div className="grid-2" style={{ gap: 12 }}>

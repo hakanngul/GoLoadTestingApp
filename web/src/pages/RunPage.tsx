@@ -125,7 +125,7 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
 
   const sum = useMemo(() => summarizeYaml(run.yaml), [run.yaml]);
   const total = sum?.total ?? 0;
-  const unit = sum ? unitFor(sum.model) : 'rps';
+  const unit = sum ? unitFor(sum.model) : 'it/s';
   const elapsed = run.status === 'queued' ? 0 : runDurationS(run.started_at, undefined);
   const last = points[points.length - 1];
   const totals = useMemo(() => {
@@ -262,7 +262,7 @@ export function ResultView({ run }: { run: Run }) {
   const errors = useAsync(() => api.runErrors(run.id), [run.id]);
   const [compareOpen, setCompareOpen] = useState(false);
   const sum = useMemo(() => summarizeYaml(run.yaml), [run.yaml]);
-  const unit = sum ? unitFor(sum.model) : 'rps';
+  const unit = sum ? unitFor(sum.model) : 'it/s';
   const s = run.summary;
   const b = bannerInfo[run.status] ?? bannerInfo.error;
   const dur = runDurationS(run.started_at, run.finished_at);

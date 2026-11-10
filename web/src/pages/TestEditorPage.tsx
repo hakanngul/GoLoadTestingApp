@@ -198,7 +198,7 @@ export function TestEditorPage() {
   if (!form && !parseErr) return <Loading />;
 
   const files: FileInfo[] = test?.files ?? [];
-  const unit = form ? unitFor(form.load.model) : 'rps';
+  const unit = form ? unitFor(form.load.model) : 'it/s';
 
   return (
     <>
