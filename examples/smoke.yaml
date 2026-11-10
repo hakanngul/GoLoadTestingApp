@@ -1,0 +1,42 @@
+# Smoke test: low, steady arrival rate against two read-only endpoints.
+# Run this after every deploy to catch obvious breakage quickly.
+name: smoke
+target:
+  base_url: https://api.example.test
+  timeout: 10s
+  headers:
+    Accept: application/json
+load:
+  model: open            # stage target = iterations per second
+  stages:
+    - duration: 10s      # ramp 0 -> 5 it/s
+      target: 5
+    - duration: 50s      # hold
+      target: 5
+  max_vus: 50
+steps:
+  - name: health
+    path: /health
+    assert:
+      - type: status
+        value: "200"
+      - type: duration
+        op: lt
+        value: 500ms
+  - name: list products
+    method: GET
+    path: /products?limit=20
+    assert:
+      - type: status
+        value: "200"
+      - type: json
+        expr: total
+        op: gte
+        value: "0"
+thresholds:
+  - metric: latency.p95
+    op: lt
+    value: 300          # milliseconds
+  - metric: error_rate
+    op: lt
+    value: 0.01         # 1%
