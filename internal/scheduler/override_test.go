@@ -181,3 +181,22 @@ func TestValidateLoad(t *testing.T) {
 		}
 	}
 }
+
+func TestDescribeLoad(t *testing.T) {
+	cases := []struct {
+		l    *model.LoadOverride
+		want string
+	}{
+		{nil, ""},
+		{&model.LoadOverride{Mode: model.LoadScale, Users: 50}, "peak 50 VUs (scaled)"},
+		{&model.LoadOverride{Mode: model.LoadProfile, Rate: 20, RampUpMs: 30000, HoldMs: 300000, RampDownMs: 10000},
+			"20 it/s, ramp 30s, hold 5m0s, down 10s"},
+		// ramp_up 0 runs as the 1 s instant ramp ApplyLoad uses.
+		{&model.LoadOverride{Mode: model.LoadProfile, Users: 5, HoldMs: 3000}, "5 VUs, ramp 1s, hold 3s"},
+	}
+	for _, c := range cases {
+		if got := DescribeLoad(c.l); got != c.want {
+			t.Errorf("DescribeLoad(%+v) = %q, want %q", c.l, got, c.want)
+		}
+	}
+}

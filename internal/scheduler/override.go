@@ -94,7 +94,11 @@ func DescribeLoad(l *model.LoadOverride) string {
 	if l.Mode == model.LoadScale {
 		return "peak " + peak + " (scaled)"
 	}
-	out := fmt.Sprintf("%s, ramp %s, hold %s", peak, msDuration(l.RampUpMs), msDuration(l.HoldMs))
+	ramp := msDuration(l.RampUpMs)
+	if ramp <= 0 {
+		ramp = instantRamp // what ApplyLoad runs for ramp_up 0
+	}
+	out := fmt.Sprintf("%s, ramp %s, hold %s", peak, ramp, msDuration(l.HoldMs))
 	if l.RampDownMs > 0 {
 		out += fmt.Sprintf(", down %s", msDuration(l.RampDownMs))
 	}
