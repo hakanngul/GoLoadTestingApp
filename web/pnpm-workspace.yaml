@@ -1,0 +1,11 @@
+# pnpm settings. pnpm 10 and 11 read these from here, not from package.json.
+
+# Only esbuild may run install scripts (pnpm 10 key, then the pnpm 11 key).
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true
+
+# Supply-chain guard: never resolve a package version younger than one day
+# (pnpm 11 default; set explicitly so pnpm 10 behaves the same).
+minimumReleaseAge: 1440
