@@ -18,7 +18,7 @@ func cmdValidate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "validate: expected exactly one scenario file")
 		return exitUsage
 	}
-	sc, err := scenario.Load(fs.Arg(0))
+	sc, err := scenario.LoadFile(fs.Arg(0))
 	if err != nil {
 		fmt.Fprintf(stderr, "invalid scenario:\n%v\n", err)
 		return exitUsage

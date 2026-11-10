@@ -37,7 +37,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	sc, err := scenario.Load(fs.Arg(0))
+	sc, err := scenario.LoadFile(fs.Arg(0))
 	if err != nil {
 		fmt.Fprintf(stderr, "invalid scenario:\n%v\n", err)
 		return exitUsage
