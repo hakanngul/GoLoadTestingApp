@@ -296,6 +296,18 @@ export function buildLoadOverride(f: LoadForm, model: LoadModel): { load?: LoadO
  * new peak (rounded, a positive stage stays >= 1); profile = ramp/hold/down
  * (ramp-up 0 = 1 s).
  */
+/**
+ * Ramp that runs for a profile override with ramp_up 0: the engine needs
+ * stage durations > 0, so "start at full load" is a 1 s ramp. Must match
+ * instantRamp in internal/scheduler/override.go.
+ */
+export const INSTANT_RAMP_MS = 1000;
+
+/** Ramp-up that actually runs: ms rounded like the server, 0 -> INSTANT_RAMP_MS. */
+export function effectiveRampUpMs(ms: number | undefined): number {
+  return Math.round(ms ?? 0) > 0 ? Math.round(ms ?? 0) : INSTANT_RAMP_MS;
+}
+
 export function overrideProfile(
   f: LoadForm,
   scenario: { model: LoadModel; stages: FormStage[] } | null,
@@ -307,7 +319,7 @@ export function overrideProfile(
     const hold = parseDuration(f.hold);
     const down = parseDuration(f.rampDown || '0s');
     if (![up, hold, down].every(Number.isFinite) || hold <= 0) return null;
-    if (up <= 0) up = 1;
+    up = effectiveRampUpMs(up * 1000) / 1000;
     const points: ProfilePoint[] = [
       { t: 0, target: 0 },
       { t: up, target },
@@ -376,7 +388,7 @@ export function describeLoad(l: LoadOverride | undefined): string {
   if (!l) return 'Scenario load';
   const peak = l.users ? `${l.users} VUs` : `${l.rate ?? 0} it/s`;
   if (l.mode === 'scale') return `Peak ${peak} (scaled)`;
-  const parts = [`ramp ${fmtGoDuration(l.ramp_up_ms)}`, `hold ${fmtGoDuration(l.hold_ms)}`];
+  const parts = [`ramp ${fmtGoDuration(effectiveRampUpMs(l.ramp_up_ms))}`, `hold ${fmtGoDuration(l.hold_ms)}`];
   if (l.ramp_down_ms) parts.push(`down ${fmtGoDuration(l.ramp_down_ms)}`);
   return `${peak} · ${parts.join(', ')}`;
 }

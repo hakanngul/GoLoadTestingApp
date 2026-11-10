@@ -180,5 +180,7 @@ test('describeLoad', async () => {
     describeLoad({ mode: 'profile', rate: 50, ramp_up_ms: 30000, hold_ms: 600000, ramp_down_ms: 10000 }),
     '50 it/s · ramp 30s, hold 10m, down 10s',
   );
-  assert.equal(describeLoad({ mode: 'profile', users: 2, ramp_up_ms: 0, hold_ms: 20000 }), '2 VUs · ramp 0s, hold 20s');
+  assert.equal(describeLoad({ mode: 'profile', users: 2, ramp_up_ms: 0, hold_ms: 20000 }), '2 VUs · ramp 1s, hold 20s');
+  // Sub-millisecond ramps round to 0 on the server, which then runs the 1 s instant ramp.
+  assert.equal(describeLoad({ mode: 'profile', users: 2, ramp_up_ms: 0.4, hold_ms: 20000 }), '2 VUs · ramp 1s, hold 20s');
 });
