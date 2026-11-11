@@ -149,12 +149,7 @@ test('error status label and tone', () => {
 });
 
 test('sortErrorGroups: count desc, overflow group last', () => {
-  const groups = [
-    g('a', 500, 'x', 5),
-    g('', 0, '(other errors)', 50),
-    g('b', 503, 'y', 9),
-    g('a', 0, 'timeout', 9),
-  ];
+  const groups = [g('a', 500, 'x', 5), g('', 0, '(other errors)', 50), g('b', 503, 'y', 9), g('a', 0, 'timeout', 9)];
   const sorted = sortErrorGroups(groups);
   assert.deepEqual(
     sorted.map((x) => x.count),
@@ -190,6 +185,12 @@ test('relative times', () => {
   assert.equal(fmtAgo('', now), '—');
   assert.equal(fmtRunOffset('2026-01-01T00:01:35Z', '2026-01-01T00:00:00Z'), '+1:35');
   assert.equal(fmtRunOffset('2026-01-01T01:02:03Z', '2026-01-01T00:00:00Z'), '+1:02:03');
+  assert.equal(fmtRunOffset('2026-01-01T00:00:42.900Z', '2026-01-01T00:00:00Z'), '+42s');
+  assert.equal(fmtRunOffset('2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), '+0s');
+  assert.equal(fmtRunOffset('2025-12-31T23:59:58Z', '2026-01-01T00:00:00Z'), '+0s'); // clock skew clamps
+  assert.equal(fmtRunOffset('2026-01-01T00:01:00Z', '2026-01-01T00:00:00Z'), '+1:00');
+  assert.equal(fmtRunOffset('2026-01-01T00:00:10Z', 'bad'), '—');
+  assert.equal(fmtRunOffset(undefined, '2026-01-01T00:00:00Z'), '—');
   assert.equal(fmtRunOffset('bad', '2026-01-01T00:00:00Z'), '—');
 });
 

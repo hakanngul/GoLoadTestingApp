@@ -167,3 +167,86 @@ func testPruneRuns(t *testing.T, s Store) {
 		}
 	}
 }
+
+// testPruneRunsPinned checks that a pinned run survives pruning (also in a
+// dry run), is pruned again once unpinned, and that the pin is persisted
+// and does not leak into other runs or survive a runner UpdateRun.
+func testPruneRunsPinned(t *testing.T, s Store) {
+	p := s.(Pruner)
+	c := ctx(t)
+	at := func(h time.Duration) time.Time { return base.Add(h) }
+	fin := func(tm time.Time) *time.Time { return &tm }
+	tt := mustTest(t, s, "prune-pin")
+	old1 := mustRun(t, s, model.Run{TestID: tt.ID, Status: model.RunPassed, StartedAt: at(0), FinishedAt: fin(at(time.Minute))})
+	old2 := mustRun(t, s, model.Run{TestID: tt.ID, Status: model.RunFailed, StartedAt: at(time.Hour), FinishedAt: fin(at(61 * time.Minute))})
+	latest := mustRun(t, s, model.Run{TestID: tt.ID, Status: model.RunPassed, StartedAt: at(2 * time.Hour), FinishedAt: fin(at(121 * time.Minute))})
+	if old1.Pinned {
+		t.Fatal("new run is pinned")
+	}
+
+	yes, no := true, false
+	got, err := s.UpdateRunMeta(c, old1.ID, nil, nil, &yes)
+	if err != nil || !got.Pinned {
+		t.Fatalf("pin = %+v, %v", got, err)
+	}
+	// Other metadata updates leave the pin alone.
+	if got, err = s.UpdateRunMeta(c, old1.ID, strp("keep"), nil, nil); err != nil || !got.Pinned || got.Label != "keep" {
+		t.Fatalf("label update = %+v, %v", got, err)
+	}
+	// A status update by the runner keeps it too.
+	upd := got
+	upd.Status = model.RunStopped
+	if err := s.UpdateRun(c, upd); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = s.GetRun(c, old1.ID); err != nil || !got.Pinned {
+		t.Fatalf("GetRun after UpdateRun = %+v, %v", got, err)
+	}
+	if o2, _ := s.GetRun(c, old2.ID); o2.Pinned {
+		t.Fatal("pin leaked to another run")
+	}
+	runs, err := s.ListRuns(c, RunFilter{TestID: tt.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range runs {
+		if r.Pinned != (r.ID == old1.ID) {
+			t.Fatalf("ListRuns: run %s pinned = %v", r.ID, r.Pinned)
+		}
+	}
+
+	cutoff := at(1000 * time.Hour)
+	for _, dry := range []bool{true, false} {
+		pruned, err := p.PruneRuns(c, cutoff, dry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pruned) != 1 || pruned[0].ID != old2.ID {
+			t.Fatalf("prune(dry=%v) = %+v, want only %s", dry, pruned, old2.ID)
+		}
+	}
+	if _, err := s.GetRun(c, old1.ID); err != nil {
+		t.Fatalf("pinned run was pruned: %v", err)
+	}
+	if _, err := s.GetRun(c, latest.ID); err != nil {
+		t.Fatalf("latest run was pruned: %v", err)
+	}
+
+	// Unpinned, it goes.
+	if got, err = s.UpdateRunMeta(c, old1.ID, nil, nil, &no); err != nil || got.Pinned {
+		t.Fatalf("unpin = %+v, %v", got, err)
+	}
+	pruned, err := p.PruneRuns(c, cutoff, false)
+	if err != nil || len(pruned) != 1 || pruned[0].ID != old1.ID {
+		t.Fatalf("prune after unpin = %+v, %v", pruned, err)
+	}
+
+	// An explicit delete of a pinned run still works.
+	pinned := mustRun(t, s, model.Run{TestID: tt.ID, Status: model.RunPassed, StartedAt: at(-time.Hour), FinishedAt: fin(at(-time.Hour))})
+	if _, err := s.UpdateRunMeta(c, pinned.ID, nil, nil, &yes); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRun(c, pinned.ID); err != nil {
+		t.Fatalf("DeleteRun(pinned): %v", err)
+	}
+}

@@ -129,7 +129,7 @@ func (s *server) handleUpdateRun(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	run, err := s.store.UpdateRunMeta(r.Context(), r.PathValue("id"), req.Label, req.Notes)
+	run, err := s.store.UpdateRunMeta(r.Context(), r.PathValue("id"), req.Label, req.Notes, req.Pinned)
 	if err != nil {
 		s.writeErr(w, r, err)
 		return

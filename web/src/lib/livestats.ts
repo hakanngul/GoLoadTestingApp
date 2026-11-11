@@ -213,7 +213,11 @@ export function fmtAgo(iso: string | undefined | null, now: number): string {
   return `${Math.floor(d / 86400)}d ago`;
 }
 
-/** Offset of `iso` from the run start as "+m:ss" (for finished runs). */
+/**
+ * Offset of `iso` from the run start: "+42s" under a minute, then "+m:ss" or
+ * "+h:mm:ss". Used for the first/last time of an error group, to show at
+ * which point of the ramp errors began.
+ */
 export function fmtRunOffset(iso: string | undefined | null, startedAt: string): string {
   if (!iso) return '—';
   const t = Date.parse(iso);
@@ -222,6 +226,7 @@ export function fmtRunOffset(iso: string | undefined | null, startedAt: string):
   const d = Math.max(0, Math.floor((t - s) / 1000));
   const h = Math.floor(d / 3600);
   const m = Math.floor((d % 3600) / 60);
+  if (d < 60) return `+${d}s`;
   const sec = String(d % 60).padStart(2, '0');
   return h > 0 ? `+${h}:${String(m).padStart(2, '0')}:${sec}` : `+${m}:${sec}`;
 }

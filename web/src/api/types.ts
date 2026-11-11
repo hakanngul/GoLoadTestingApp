@@ -49,6 +49,8 @@ export interface Run {
   notes: string;
   /** Schedule that started the run (absent = started by hand). */
   schedule_id?: string;
+  /** Protected from retention pruning (absent = not pinned). */
+  pinned?: boolean;
 }
 
 export interface Summary {
@@ -274,6 +276,7 @@ export interface StartRunRequest {
 export interface UpdateRunRequest {
   label?: string;
   notes?: string;
+  pinned?: boolean;
 }
 
 // ---------- Reporting ----------

@@ -49,13 +49,7 @@ export function RunsPage() {
         <label className="label" htmlFor="test-filter" style={{ margin: 0 }}>
           Test
         </label>
-        <select
-          id="test-filter"
-          className="input"
-          style={{ width: 220 }}
-          value={testId}
-          onChange={(e) => setParam('test', e.target.value)}
-        >
+        <select id="test-filter" className="input" style={{ width: 220 }} value={testId} onChange={(e) => setParam('test', e.target.value)}>
           <option value="">All tests</option>
           {(tests.data ?? []).map((t) => (
             <option key={t.id} value={t.id}>
@@ -118,6 +112,11 @@ export function RunsPage() {
                         <span className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
                           {r.label ? <RunLabel label={r.label} /> : !r.schedule_id && <span className="muted">—</span>}
                           <ScheduledBadge scheduleId={r.schedule_id} />
+                          {r.pinned && (
+                            <span className="muted" title="Pinned: never removed by retention" style={{ display: 'inline-flex' }}>
+                              <Icon name="pin" size={13} />
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td>
@@ -135,11 +134,7 @@ export function RunsPage() {
                       <td className="num">{r.workers || 1}</td>
                       <td className="actions">
                         {s && (
-                          <Link
-                            className="btn sm ghost"
-                            to={`/compare?runs=${r.id}`}
-                            onClick={(e) => e.stopPropagation()}
-                          >
+                          <Link className="btn sm ghost" to={`/compare?runs=${r.id}`} onClick={(e) => e.stopPropagation()}>
                             Compare
                           </Link>
                         )}
@@ -154,8 +149,8 @@ export function RunsPage() {
       </div>
       {retentionS > 0 && (
         <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-          Runs older than {fmtRetention(retentionS)} are deleted automatically (a test&apos;s baseline and latest run
-          are kept).
+          Runs older than {fmtRetention(retentionS)} are deleted automatically (a test&apos;s baseline and latest run are kept). Pinned runs
+          are never removed by retention.
         </div>
       )}
     </>

@@ -204,7 +204,7 @@ const filesExpr = `COALESCE((SELECT json_agg(json_build_object('name', f.name, '
 func runCols(alias string) string {
 	cols := []string{"id::text", "test_id::text", "test_name", "status", "yaml", "workers",
 		"started_at", "finished_at", "summary", "thresholds", "peak_cpu", "warnings", "error",
-		"label", "notes", "schedule_id"}
+		"label", "notes", "schedule_id", "pinned"}
 	for i, c := range cols {
 		cols[i] = alias + "." + c
 	}
@@ -227,12 +227,13 @@ type runRow struct {
 	peakCPU                            *float64
 	errText                            *string
 	label, notes, scheduleID           *string
+	pinned                             *bool
 }
 
 func (r *runRow) dest() []any {
 	return []any{&r.id, &r.testID, &r.testName, &r.status, &r.yaml, &r.workers,
 		&r.startedAt, &r.finishedAt, &r.summary, &r.thresholds, &r.peakCPU, &r.warnings, &r.errText,
-		&r.label, &r.notes, &r.scheduleID}
+		&r.label, &r.notes, &r.scheduleID, &r.pinned}
 }
 
 // run converts a scanned row; ok is false when the row was all NULL.
@@ -252,6 +253,7 @@ func (r *runRow) run() (model.Run, bool, error) {
 		Label:      deref(r.label),
 		Notes:      deref(r.notes),
 		ScheduleID: deref(r.scheduleID),
+		Pinned:     deref(r.pinned),
 		Thresholds: []model.ThresholdResult{},
 		Warnings:   []string{},
 	}
@@ -836,14 +838,15 @@ func (p *Postgres) ListErrorGroups(ctx context.Context, runID string) ([]model.E
 	return out, nil
 }
 
-// UpdateRunMeta sets label and/or notes (nil = unchanged).
-func (p *Postgres) UpdateRunMeta(ctx context.Context, id string, label, notes *string) (model.Run, error) {
+// UpdateRunMeta sets label, notes and/or pinned (nil = unchanged).
+func (p *Postgres) UpdateRunMeta(ctx context.Context, id string, label, notes *string, pinned *bool) (model.Run, error) {
 	if !isUUID(id) {
 		return model.Run{}, ErrNotFound
 	}
 	var rr runRow
-	err := p.pool.QueryRow(ctx, `UPDATE runs SET label = COALESCE($2::text, label), notes = COALESCE($3::text, notes)
-		WHERE id = $1 RETURNING `+runCols("runs"), id, label, notes).Scan(rr.dest()...)
+	err := p.pool.QueryRow(ctx, `UPDATE runs SET label = COALESCE($2::text, label), notes = COALESCE($3::text, notes),
+			pinned = COALESCE($4::boolean, pinned)
+		WHERE id = $1 RETURNING `+runCols("runs"), id, label, notes, pinned).Scan(rr.dest()...)
 	if err != nil {
 		return model.Run{}, mapErr(err)
 	}

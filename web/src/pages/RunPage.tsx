@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, download, errorText, exportUrls, subscribeRun } from '../api/client';
 import { isFinished, type Comparison, type LiveStats, type MetricPoint, type Run, type Summary } from '../api/types';
 import { LatencyHistogram, RunCharts } from '../components/charts';
-import { FailuresTable, LiveStatsPanel } from '../components/livestats';
+import { FailuresTable, LiveStatsPanel, fmtOffsetCell } from '../components/livestats';
 import { BaselineBadge, DeltaText, Menu, MetricDeltaTable, OverallBadge, RunLabel, WindowControl } from '../components/report';
 import { ConfirmDialog, ErrorAlert, Icon, Kpi, Loading, Modal, ScheduledBadge, StatusBadge } from '../components/ui';
 import {
@@ -23,7 +23,7 @@ import { fmtRegressionValue, isRegression, regressionMetric, regressionRule } fr
 import { useAsync, useNow } from '../lib/hooks';
 import { OP_SYMBOL, summarizeYaml, unitFor } from '../lib/scenario';
 import { remoteWorkers } from '../lib/workers';
-import { errorStatusLabel, errorStatusTone, fmtRunOffset } from '../lib/livestats';
+import { errorStatusLabel, errorStatusTone } from '../lib/livestats';
 import {
   customWindow,
   findDelta,
@@ -74,6 +74,11 @@ function RunHeader({ run, children }: { run: Run; children?: ReactNode }) {
           <StatusBadge status={run.status} />
           <RunLabel label={run.label} size="lg" />
           <ScheduledBadge scheduleId={run.schedule_id} size="lg" />
+          {run.pinned && (
+            <span className="muted" title="Pinned" style={{ display: 'inline-flex' }}>
+              <Icon name="pin" size={18} />
+            </span>
+          )}
         </h1>
       </div>
       <span className="spacer" />
@@ -208,7 +213,9 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
             <div className="num" style={{ fontSize: 15, fontWeight: 600 }}>
               {fmtClock(runDurationS(run.started_at, undefined))}
             </div>
-            <div className="muted" style={{ fontSize: 11.5 }}>waiting for workers</div>
+            <div className="muted" style={{ fontSize: 11.5 }}>
+              waiting for workers
+            </div>
           </div>
         ) : (
           <div className="stack" style={{ gap: 4, alignItems: 'flex-end' }}>
@@ -242,44 +249,56 @@ function LiveView({ initial, onDone }: { initial: Run; onDone: (r: Run) => void 
         <QueuedState run={run} />
       ) : (
         <>
-      <div className="kpis" style={{ marginBottom: 12 }}>
-        <Kpi
-          label="Throughput"
-          value={fmtRps(last?.rps)}
-          unit="req/s"
-          sub={
-            <>
-              target {last ? fmtRps(last.target) : '—'} {unit}
-            </>
-          }
-        />
-        <Kpi label="p50" value={last ? fmtMs(last.p50_ms) : '—'} sub={`mean ${fmtMs(last?.mean_ms)}`} />
-        <Kpi label="p95" value={last ? fmtMs(last.p95_ms) : '—'} sub={<span title="Since the start of the run">{cumSub(cum?.p95_ms)}</span>} />
-        <Kpi label="p99" value={last ? fmtMs(last.p99_ms) : '—'} sub={<span title="Since the start of the run">{cumSub(cum?.p99_ms)}</span>} />
-        <Kpi
-          label="Error rate"
-          value={fmtPct(last?.error_rate)}
-          tone={last && last.error_rate > 0.05 ? 'bad' : last && last.error_rate > 0.01 ? 'warn' : undefined}
-          sub={`${fmtInt(totals.errs)} of ${fmtCompact(totals.req)} req`}
-        />
-        <Kpi label="Active" value={fmtInt(last?.active)} sub={sum?.model === 'open' && sum.maxVus ? `max_vus ${sum.maxVus}` : 'in-flight'} />
-        <Kpi
-          label="Dropped"
-          value={fmtInt(totals.dropped)}
-          tone={totals.dropped > 0 ? 'warn' : undefined}
-          sub={`${fmtInt(last?.dropped ?? 0)} last second`}
-        />
-        <Kpi
-          label="Generator CPU"
-          value={last ? Math.round(cpu * 100) : '—'}
-          unit={last ? '%' : undefined}
-          tone={cpu > 0.9 ? 'bad' : cpu > 0.75 ? 'warn' : undefined}
-          sub={`${last?.workers ?? run.workers} worker${(last?.workers ?? run.workers) === 1 ? '' : 's'}`}
-        />
-      </div>
+          <div className="kpis" style={{ marginBottom: 12 }}>
+            <Kpi
+              label="Throughput"
+              value={fmtRps(last?.rps)}
+              unit="req/s"
+              sub={
+                <>
+                  target {last ? fmtRps(last.target) : '—'} {unit}
+                </>
+              }
+            />
+            <Kpi label="p50" value={last ? fmtMs(last.p50_ms) : '—'} sub={`mean ${fmtMs(last?.mean_ms)}`} />
+            <Kpi
+              label="p95"
+              value={last ? fmtMs(last.p95_ms) : '—'}
+              sub={<span title="Since the start of the run">{cumSub(cum?.p95_ms)}</span>}
+            />
+            <Kpi
+              label="p99"
+              value={last ? fmtMs(last.p99_ms) : '—'}
+              sub={<span title="Since the start of the run">{cumSub(cum?.p99_ms)}</span>}
+            />
+            <Kpi
+              label="Error rate"
+              value={fmtPct(last?.error_rate)}
+              tone={last && last.error_rate > 0.05 ? 'bad' : last && last.error_rate > 0.01 ? 'warn' : undefined}
+              sub={`${fmtInt(totals.errs)} of ${fmtCompact(totals.req)} req`}
+            />
+            <Kpi
+              label="Active"
+              value={fmtInt(last?.active)}
+              sub={sum?.model === 'open' && sum.maxVus ? `max_vus ${sum.maxVus}` : 'in-flight'}
+            />
+            <Kpi
+              label="Dropped"
+              value={fmtInt(totals.dropped)}
+              tone={totals.dropped > 0 ? 'warn' : undefined}
+              sub={`${fmtInt(last?.dropped ?? 0)} last second`}
+            />
+            <Kpi
+              label="Generator CPU"
+              value={last ? Math.round(cpu * 100) : '—'}
+              unit={last ? '%' : undefined}
+              tone={cpu > 0.9 ? 'bad' : cpu > 0.75 ? 'warn' : undefined}
+              sub={`${last?.workers ?? run.workers} worker${(last?.workers ?? run.workers) === 1 ? '' : 's'}`}
+            />
+          </div>
 
-      <RunCharts points={points} targetUnit={unit} xMax={total} />
-      <LiveStatsPanel stats={live.stats} seq={live.seq} now={now} />
+          <RunCharts points={points} targetUnit={unit} xMax={total} />
+          <LiveStatsPanel stats={live.stats} seq={live.seq} now={now} startedAt={run.started_at} />
         </>
       )}
 
@@ -308,10 +327,7 @@ function QueuedState({ run }: { run: Run }) {
   const want = Math.max(1, run.workers || 1);
   const remote = remoteWorkers(fleet.data ?? []);
   // Workers already attached to this run, plus idle ones it can claim.
-  const ready = Math.min(
-    want,
-    remote.filter((w) => w.run_id === run.id || (w.state === 'idle' && !w.run_id)).length,
-  );
+  const ready = Math.min(want, remote.filter((w) => w.run_id === run.id || (w.state === 'idle' && !w.run_id)).length);
   const launching = Math.max(0, want - ready);
   return (
     <div className="card">
@@ -321,8 +337,8 @@ function QueuedState({ run }: { run: Run }) {
         <p>
           {launching > 0 ? (
             <>
-              Launching <strong>{launching}</strong> spot instance{launching === 1 ? '' : 's'} for this {want}-worker run;
-              this can take a few minutes.
+              Launching <strong>{launching}</strong> spot instance{launching === 1 ? '' : 's'} for this {want}-worker run; this can take a
+              few minutes.
             </>
           ) : (
             <>All {want} workers are connected; dispatching the scenario…</>
@@ -392,6 +408,9 @@ export function ResultView({ run: initialRun }: { run: Run }) {
   const [delErr, setDelErr] = useState<unknown>(null);
   const [toast, setToast] = useState<{ text: string; bad?: boolean } | null>(null);
   const [baselineBusy, setBaselineBusy] = useState(false);
+  const [pinBusy, setPinBusy] = useState(false);
+  const health = useAsync(() => api.health(), []);
+  const retentionOn = (health.data?.retention_seconds ?? 0) > 0;
   const sum = useMemo(() => summarizeYaml(run.yaml), [run.yaml]);
   const unit = sum ? unitFor(sum.model) : 'it/s';
   const rep = report.data && report.data.run.id === run.id ? report.data : undefined;
@@ -456,6 +475,18 @@ export function ResultView({ run: initialRun }: { run: Run }) {
       setBaselineBusy(false);
     }
   };
+  const togglePin = async () => {
+    setPinBusy(true);
+    try {
+      const r = await api.updateRun(run.id, { pinned: !run.pinned });
+      setRun((cur) => ({ ...cur, pinned: r.pinned ?? false }));
+      setToast({ text: r.pinned ? 'Run pinned.' : 'Run unpinned.' });
+    } catch (e) {
+      setToast({ text: `Pin: ${errorText(e).message}`, bad: true });
+    } finally {
+      setPinBusy(false);
+    }
+  };
   const dl = (url: string, name: string, what: string) => {
     setToast({ text: `Downloading ${what}…` });
     download(url, name).catch((e) => setToast({ text: `${what}: ${errorText(e).message}`, bad: true }));
@@ -505,6 +536,16 @@ export function ResultView({ run: initialRun }: { run: Run }) {
           <button className="btn" onClick={() => nav(`/tests/${run.test_id}`)}>
             <Icon name="edit" size={14} /> Edit test
           </button>
+          <button
+            className={`btn ghost icon ${run.pinned ? 'on' : ''}`}
+            title={run.pinned ? 'Unpin run' : 'Pin run'}
+            aria-label={run.pinned ? 'Unpin run' : 'Pin run'}
+            aria-pressed={!!run.pinned}
+            disabled={pinBusy}
+            onClick={togglePin}
+          >
+            <Icon name="pin" size={15} />
+          </button>
           <button className="btn ghost icon danger" title="Delete run" aria-label="Delete run" onClick={() => setConfirmDelete(true)}>
             <Icon name="trash" size={15} />
           </button>
@@ -534,6 +575,11 @@ export function ResultView({ run: initialRun }: { run: Run }) {
         </div>
 
         <LabelNotes run={run} onSaved={setRun} />
+        {retentionOn && (
+          <div className="muted no-print" style={{ fontSize: 12 }}>
+            {run.pinned ? 'Pinned runs are never removed by retention.' : 'Pin this run to keep it when retention removes old runs.'}
+          </div>
+        )}
 
         {run.error && (
           <div className="alert bad">
@@ -566,7 +612,9 @@ export function ResultView({ run: initialRun }: { run: Run }) {
             </span>
           </div>
         )}
-        {report.error && hasResults ? <ErrorAlert error={report.error} title="Windowed report unavailable — showing the whole run" /> : null}
+        {report.error && hasResults ? (
+          <ErrorAlert error={report.error} title="Windowed report unavailable — showing the whole run" />
+        ) : null}
 
         <div className="kpis">
           <Kpi label="Requests" value={fmtInt(s?.requests)} sub={`${fmtInt(s?.dropped)} dropped`} />
@@ -654,7 +702,13 @@ export function ResultView({ run: initialRun }: { run: Run }) {
           finished
           highlight={highlight}
           onSelectRange={hasResults ? onSelectRange : undefined}
-          throughputExtra={hasResults ? <span className="muted no-print" style={{ fontSize: 11.5 }}>drag to set a custom window</span> : undefined}
+          throughputExtra={
+            hasResults ? (
+              <span className="muted no-print" style={{ fontSize: 11.5 }}>
+                drag to set a custom window
+              </span>
+            ) : undefined
+          }
         />
 
         <div className="card" id="failures">
@@ -672,10 +726,8 @@ export function ResultView({ run: initialRun }: { run: Run }) {
             </div>
           ) : (
             <FailuresTable
-              groups={errorGroups.loading && !errorGroups.data ? null : errorGroups.data ?? []}
-              fmtTime={(iso) => (
-                <span title={fmtDateTime(iso)}>{fmtRunOffset(iso, run.started_at)}</span>
-              )}
+              groups={errorGroups.loading && !errorGroups.data ? null : (errorGroups.data ?? [])}
+              fmtTime={(iso) => fmtOffsetCell(iso, run.started_at)}
               maxHeight={420}
             />
           )}
@@ -738,8 +790,17 @@ export function ResultView({ run: initialRun }: { run: Run }) {
           title="Delete this run?"
           message={
             <>
-              The run{run.label ? <> <b>{run.label}</b></> : ''} of <b>{run.test_name}</b> from {fmtDateTime(run.started_at)}, its
-              metrics and error samples are deleted permanently.
+              The run
+              {run.label ? (
+                <>
+                  {' '}
+                  <b>{run.label}</b>
+                </>
+              ) : (
+                ''
+              )}{' '}
+              of <b>{run.test_name}</b> from {fmtDateTime(run.started_at)}, its metrics and error samples are deleted permanently.
+              {run.pinned && ' It is pinned; deleting it by hand overrides the pin.'}
               {isBaseline && ' It is the baseline of its test; the test will have no baseline afterwards.'}
             </>
           }
@@ -839,8 +900,7 @@ function BaselinePanel({
         </div>
       ) : (
         <div className="empty">
-          <strong>No baseline for {run.test_name}</strong>
-          A baseline is the reference run that new runs are checked against for regressions.
+          <strong>No baseline for {run.test_name}</strong>A baseline is the reference run that new runs are checked against for regressions.
           {hasResults && (
             <div style={{ marginTop: 10 }}>
               <button className="btn no-print" onClick={onSet} disabled={busy}>
