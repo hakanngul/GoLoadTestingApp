@@ -137,7 +137,9 @@ func (s *Scenario) CheckVars(columns []string, columnsKnown bool) []VarIssue {
 				checkHeaders("auth.login.headers", -1, l.Headers, none)
 				check("auth.login.body", -1, l.Body, none)
 			}
-			check("auth.value", -1, a.Value, authVars)
+			if a.InjectEnabled() {
+				check("auth.value", -1, a.Value, authVars)
+			}
 		case AuthBearer:
 			check("auth.token", -1, a.Token, none)
 			if a.Value != DefaultAuthValue {

@@ -9,19 +9,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// registerDraftTools is the hook for the tools that draft a scenario from
-// a URL.
-//
-// TODO(draft): another package provides `draft_test` (propose a scenario
-// YAML for a URL) and `discover_links` (crawl a page for candidate
-// endpoints). Register them here with one call each, e.g.
-//
-//	addTool(s, "draft_test", ..., kindRead, true, h.draftTest)
-//
-// They only read, so they belong to the read-only set. Until then this is
-// a no-op.
-func registerDraftTools(s *mcp.Server, h *handlers) {}
-
 func (h *handlers) registerPrompts(s *mcp.Server) {
 	s.AddPrompt(&mcp.Prompt{
 		Name:        "create_load_test",

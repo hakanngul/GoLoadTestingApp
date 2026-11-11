@@ -18,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/apiclient"
+	"github.com/hakanngul/GoLoadTestingApp/internal/mcpguide"
 	"github.com/hakanngul/GoLoadTestingApp/internal/mcpserver"
 )
 
@@ -119,7 +120,7 @@ func runMCP(ctx context.Context, o *mcpOpts, t mcp.Transport, stderr io.Writer) 
 
 	srv := mcpserver.New(mcpserver.Options{
 		Client: client, Version: version, ReadOnly: o.readOnly, MaxUsers: o.maxUsers, MaxDuration: o.maxDuration,
-		// TODO: Guide and CreateTestPrompt are provided by the draft package.
+		Guide: mcpguide.Guide(), CreateTestPrompt: mcpguide.CreateTestPrompt,
 	})
 	log.Info("MCP server ready on stdio", "read_only", o.readOnly, "max_users", o.maxUsers, "max_duration", o.maxDuration.String())
 	if err := srv.Run(ctx, t); err != nil && ctx.Err() == nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {

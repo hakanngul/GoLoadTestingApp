@@ -163,7 +163,7 @@ func TestListToolsAndReadOnly(t *testing.T) {
 
 	mutating := []string{"create_test", "update_test", "start_run", "stop_run", "set_baseline", "create_suite", "run_suite", "stop_suite_run"}
 	reading := []string{"list_tests", "get_test", "validate_test", "try_test", "list_runs", "get_run", "wait_run", "get_report", "compare_runs",
-		"list_suites", "get_suite", "get_suite_run", "wait_suite_run", "list_schedules", "get_server_info"}
+		"list_suites", "get_suite", "get_suite_run", "wait_suite_run", "list_schedules", "get_server_info", "draft_test", "discover_links"}
 	has := func(set []string, n string) bool {
 		for _, s := range set {
 			if s == n {

@@ -967,8 +967,11 @@ function AuthSection({ auth, mutate, dataEnabled }: { auth: FormAuth; mutate: Mu
                 httpOnly
                 nameOptional
               />
-              {auth.login.extract.length === 0 && (
-                <div className="alert warn">The login request needs at least one extract (e.g. token from json).</div>
+              {auth.login.extract.length === 0 && auth.inject && (
+                <div className="alert warn">
+                  The login request needs at least one extract (e.g. token from json). For a login that only sets a session cookie, turn
+                  off &quot;Sent with every step&quot; below.
+                </div>
               )}
               {loginVars.length > 0 && !dataEnabled && (
                 <div className="alert warn">

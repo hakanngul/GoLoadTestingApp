@@ -28,7 +28,7 @@ Top level keys: `name`, `target`, `load`, `data`, `auth`, `steps`, `thresholds`,
 - `thresholds`: `metric` is `latency.p50|p90|p95|p99|mean|max` (milliseconds), `error_rate` (fraction, 0.01 = 1%) or `rps`; `op` is lt, lte, gt, gte.
 - `regression`: compares the run with the test's baseline; metrics `p50_ms p90_ms p95_ms p99_ms mean_ms max_ms error_rate rps`; set exactly one of `max_increase_pct`, `max_increase`, `max_decrease_pct`, `max_decrease`.
 - `data`: `file` (CSV, header row = variable names) and `mode` (`sequential`, `random`, `unique`). The file is stored with the test; it does not have to exist when you only validate.
-- `auth`: `type: login` (log in once per user and reuse the token), `bearer`, or `basic`. A login step needs at least one `extract`; the token is injected as `Authorization: Bearer {{token}}` into every step.
+- `auth`: `type: login` (log in once per user and reuse the token), `bearer`, or `basic`. With a token, the login step extracts it (`var: token`) and it is injected as `Authorization: Bearer {{token}}` into every step. A login that only sets a session cookie needs no `extract`: set `inject: false` (the cookies are replayed for each user).
 
 Example 1: closed model, simple page checks (what a "load" draft looks like).
 

@@ -268,7 +268,7 @@ func TestBuildLogin(t *testing.T) {
 		if sc.Target.CookiesEnabled() != true {
 			t.Error("cookies must stay on")
 		}
-		if len(sc.Auth.Login.Extract) != 1 {
+		if len(sc.Auth.Login.Extract) != 0 {
 			t.Errorf("extract = %+v", sc.Auth.Login.Extract)
 		}
 		if r.DataFile != "users.csv" || !strings.Contains(strings.Join(r.Notes, " "), "users.csv") {

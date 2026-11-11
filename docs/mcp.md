@@ -35,7 +35,7 @@ goloadtest mcp --server https://goload.internal.example --token "$GOLOAD_TOKEN"
 |---|---|---|
 | `--server` | `GOLOAD_SERVER` | GoLoad server URL. |
 | `--token` | `GOLOAD_TOKEN` | API token. Prefer the env var; flags show up in `ps`. |
-| `--read-only` | | Hide every mutating tool (create/update/start/stop/baseline/suites). Good for exploration. |
+| `--read-only` | | Hide every mutating tool (create/update/start/stop/baseline/suites). Good for exploration. `try_test` and `discover_links` stay available: they send one request per step to the target. |
 | `--max-users` | | Refuse runs above this many users (default 50). |
 | `--max-duration` | | Refuse runs longer than this (default 10m). |
 

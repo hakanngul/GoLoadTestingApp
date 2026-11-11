@@ -190,7 +190,7 @@ auth:
 - `per_user` caches one login per distinct rendered login request (usually one per CSV row); concurrent iterations for the same user wait for a single login. Logins are reported as step `auth:login`; cache hits report nothing.
 - The header is added to every HTTP step and WebSocket handshake unless the step sets it itself. `inject: false` only exposes the extracted variables.
 - A failed login fails the iteration and is retried next time; a `401` from any step drops the cached login.
-- Session cookies work like the token: the login runs as a new visitor, the cookies it sets are cached with the extracted variables, and every virtual user that uses that login gets them in its cookie jar before its first step. With `scope: shared` all virtual users share one server-side session; with `per_user` there is one per distinct login. A re-login (`refresh`, or after a `401`) replaces them.
+- Session cookies work like the token: the login runs as a new visitor, the cookies it sets are cached with the extracted variables, and every virtual user that uses that login gets them in its cookie jar before its first step. With `scope: shared` all virtual users share one server-side session; with `per_user` there is one per distinct login. A re-login (`refresh`, or after a `401`) replaces them. A login that only sets a session cookie needs no `extract`: set `inject: false` (cookies must stay enabled).
 - `bearer` (`token: "{{api_key}}"`) and `basic` (`username`, `password`) need no login; `{{var}}`s come from CSV data.
 
 ### Test request (`goloadtest try`)

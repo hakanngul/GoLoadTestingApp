@@ -394,9 +394,9 @@ func buildAuth(l *Login, site *url.URL) (*scenario.Auth, []string, error) {
 		step.Extract = []scenario.Extract{{Var: "token", From: scenario.FromJSON, Expr: tp}}
 		notes = append(notes, fmt.Sprintf("Each user logs in once; the token found at %q in the login response is sent as a Bearer token on every request.", tp))
 	} else {
-		// The login step needs one extract; the session cookie itself is kept
-		// by the per-user cookie jar, so nothing is injected into requests.
-		step.Extract = []scenario.Extract{{Var: "session", From: scenario.FromHeader, Expr: "Set-Cookie"}}
+		// Cookie session: the cookies the login sets (also on redirect hops)
+		// are cached and replayed into each user's cookie jar, so the login
+		// needs no extract and nothing is injected into requests.
 		off := false
 		auth.Inject = &off
 		notes = append(notes, "No token location was given, so each user keeps the session cookie from the login response (no Authorization header is added). If your site returns a token instead, tell me where to find it in the response.")
