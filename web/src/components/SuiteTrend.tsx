@@ -3,7 +3,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { useNavigate } from 'react-router-dom';
 import type { SuiteRun } from '../api/types';
 import { fmtMs, fmtPct } from '../lib/format';
-import { fmtShortDate } from '../lib/report';
+import { fmtShortDate, runName } from '../lib/report';
 import { suiteTrend, type SuiteTrendPoint } from '../lib/suite';
 import { ChartCard, runColors, usePalette, yMs, type Palette, type Series } from './charts';
 
@@ -82,7 +82,7 @@ function TrendLines({
           <XAxis
             dataKey="idx"
             type="category"
-            tickFormatter={(v: number) => (rows[v] ? fmtShortDate(rows[v].point.started_at) : '')}
+            tickFormatter={(v: number) => (rows[v] ? runName(rows[v].point) : '')}
             stroke={pal['--border-strong']}
             tick={{ fill: pal['--text-3'], fontSize: 10.5 }}
             tickLine={false}
