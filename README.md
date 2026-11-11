@@ -231,6 +231,15 @@ Runs started by a schedule carry `schedule_id` and show a **scheduled** badge
 linking back to it. *Run now* starts a run with the schedule's settings
 immediately (it ignores timing and the overlap policy).
 
+A schedule can also run a **test suite** instead of a single test: switch the
+dialog's target to *Suite* and pick one. Each occurrence starts a suite run
+(label default `scheduled: <name>`; the schedule's last result links to
+`/suite-runs/{id}`). Suite schedules have no load override or workers — every
+test in the suite uses the load set in the suite — and the overlap policy
+considers active suite runs as well as active runs. *Run now* on a suite
+schedule answers `201 {"suite_run": ...}`. Deleting the suite deletes its
+schedules.
+
 Semantics worth knowing:
 
 - **The server must be running at fire time.** Schedules run inside

@@ -104,7 +104,7 @@ func (m *Memory) UpdateSuite(ctx context.Context, s model.Suite) (model.Suite, e
 	return cloneSuite(st), nil
 }
 
-// DeleteSuite removes a suite and its suite runs.
+// DeleteSuite removes a suite, its suite runs and its schedules.
 func (m *Memory) DeleteSuite(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -115,6 +115,11 @@ func (m *Memory) DeleteSuite(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	delete(m.suites, id)
+	for sid, sc := range m.scheds {
+		if sc.SuiteID == id {
+			delete(m.scheds, sid)
+		}
+	}
 	for rid, r := range m.sruns {
 		if r.SuiteID == id {
 			delete(m.sruns, rid)

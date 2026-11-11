@@ -13,6 +13,7 @@ import type {
   SchedulePreview,
   SchedulePreviewRequest,
   ScheduleRequest,
+  ScheduleSuiteRunResponse,
   StartRunRequest,
   StartSuiteRequest,
   Suite,
@@ -215,7 +216,8 @@ export const api = {
   createSchedule: (req: ScheduleRequest) => request<Schedule>('POST', '/api/schedules', req),
   updateSchedule: (id: string, req: ScheduleRequest) => request<Schedule>('PUT', `/api/schedules/${enc(id)}`, req),
   deleteSchedule: (id: string) => request<void>('DELETE', `/api/schedules/${enc(id)}`),
-  runScheduleNow: (id: string) => request<Run>('POST', `/api/schedules/${enc(id)}/run-now`),
+  /** A Run for a test schedule, `{suite_run}` for a suite schedule. */
+  runScheduleNow: (id: string) => request<Run | ScheduleSuiteRunResponse>('POST', `/api/schedules/${enc(id)}/run-now`),
   previewSchedule: (req: SchedulePreviewRequest) => request<SchedulePreview>('POST', '/api/schedules/preview', req),
 
   // ---------- test suites ----------

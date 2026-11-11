@@ -413,7 +413,10 @@ export interface LoadOverride {
 }
 
 export interface ScheduleSpec {
-  test_id: string;
+  /** The test to run. Exactly one of test_id / suite_id is set. */
+  test_id?: string;
+  /** The test suite to run (a suite schedule has no load override and no workers). */
+  suite_id?: string;
   name: string;
   kind: ScheduleKind;
   /** once: local wall time "YYYY-MM-DDTHH:MM" in timezone. */
@@ -432,12 +435,16 @@ export interface ScheduleSpec {
 
 export interface Schedule extends ScheduleSpec {
   id: string;
+  /** "" for a suite schedule. */
   test_name: string;
+  /** Suite schedules only. */
+  suite_name?: string;
   enabled: boolean;
   created_at: string;
   updated_at: string;
   next_run_at?: string;
   last_run_at?: string;
+  /** A run ID, or a suite run ID for a suite schedule. */
   last_run_id?: string;
   last_status?: ScheduleStatus;
   last_message?: string;
@@ -445,6 +452,11 @@ export interface Schedule extends ScheduleSpec {
 
 export interface ScheduleRequest extends ScheduleSpec {
   enabled?: boolean;
+}
+
+/** Response of POST /api/schedules/{id}/run-now for a suite schedule. */
+export interface ScheduleSuiteRunResponse {
+  suite_run: SuiteRun;
 }
 
 export interface SchedulePreviewRequest {

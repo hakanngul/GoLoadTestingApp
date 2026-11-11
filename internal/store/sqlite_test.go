@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -173,3 +174,63 @@ func TestSQLiteForeignKeys(t *testing.T) {
 }
 
 func isNotFound(err error) bool { return err != nil && errors.Is(err, ErrNotFound) }
+
+// TestSQLiteSuiteScheduleMigration checks that migration 0006 (which
+// rebuilds the schedules table) keeps the rows of a database migrated up
+// to 0005, including with foreign keys on.
+func TestSQLiteSuiteScheduleMigration(t *testing.T) {
+	c := context.Background()
+	path := filepath.Join(t.TempDir(), "goload.db")
+	raw, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migs, err := loadMigrationsFrom(sqliteMigrationFS, "migrations_sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(c, `CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migs {
+		if m.version > 5 {
+			break
+		}
+		if _, err := raw.ExecContext(c, m.sql); err != nil {
+			t.Fatalf("apply %s: %v", m.name, err)
+		}
+		if _, err := raw.ExecContext(c, `INSERT INTO schema_migrations (version, applied_at) VALUES (?, 0)`, m.version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, testID := newID(), newID()
+	if _, err := raw.ExecContext(c, `INSERT INTO tests (id, name, yaml, created_at, updated_at) VALUES (?, 'old', 'y', 1, 1)`, testID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(c, `INSERT INTO schedules (id, test_id, name, kind, cron, workers, last_run_id, last_status, created_at, updated_at, next_run_at)
+		VALUES (?, ?, 'nightly', 'recurring', '0 3 * * *', 2, 'r1', 'started', 5, 6, 7)`, id, testID); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	s, err := NewSQLite(c, path)
+	if err != nil {
+		t.Fatalf("NewSQLite (migrate 0006): %v", err)
+	}
+	defer s.Close()
+	got, err := s.GetSchedule(c, id)
+	if err != nil {
+		t.Fatalf("GetSchedule: %v", err)
+	}
+	if got.TestID != testID || got.TestName != "old" || got.SuiteID != "" || got.Name != "nightly" || got.Cron != "0 3 * * *" ||
+		got.Workers != 2 || got.LastRunID != "r1" || got.LastStatus != model.ScheduleStarted || got.NextRunAt == nil {
+		t.Fatalf("migrated schedule = %+v", got)
+	}
+	// The rebuilt table still cascades from the test.
+	if err := s.DeleteTest(c, testID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetSchedule(c, id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("schedule survived its test: %v", err)
+	}
+}

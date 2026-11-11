@@ -12,6 +12,7 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scheduler"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
+	"github.com/hakanngul/GoLoadTestingApp/internal/suite"
 )
 
 const closedSchedYAML = `
@@ -205,4 +206,54 @@ func TestSchedulesRequireAuth(t *testing.T) {
 	wantStatus(t, e.json(t, "GET", "/api/schedules", nil), http.StatusUnauthorized)
 	rec := e.do(t, "GET", "/api/schedules", nil, "Authorization", "Bearer sekret")
 	wantStatus(t, rec, http.StatusOK)
+}
+
+func TestSuiteScheduleAPI(t *testing.T) {
+	st := store.NewMemory()
+	rn := newFakeRunner(st)
+	svc := suite.New(suite.Options{Store: st, Runner: rn, Poll: 5 * time.Millisecond})
+	sch := scheduler.New(scheduler.Options{Store: st, Runner: rn, Suites: svc})
+	s := newServer(Config{Store: st, Runner: rn, Version: "test", Scheduler: sch, Suites: svc})
+	e := &env{h: s.handler(), srv: s, runner: rn}
+
+	test, _ := st.CreateTest(context.Background(), model.Test{Name: "shop", YAML: closedSchedYAML})
+	su, err := st.CreateSuite(context.Background(), model.Suite{Name: "smoke", Mode: model.SuiteSequential,
+		Items: []model.SuiteItem{{TestID: test.ID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both targets and load on a suite schedule are rejected.
+	wantAPIError(t, e.json(t, "POST", "/api/schedules", map[string]any{
+		"test_id": test.ID, "suite_id": su.ID, "name": "x", "kind": "recurring", "cron": "@daily"}), http.StatusBadRequest, "invalid schedule")
+	wantAPIError(t, e.json(t, "POST", "/api/schedules", map[string]any{
+		"suite_id": su.ID, "name": "x", "kind": "recurring", "cron": "@daily",
+		"load": map[string]any{"mode": "scale", "users": 2}}), http.StatusBadRequest, "invalid schedule")
+
+	rec := e.json(t, "POST", "/api/schedules", map[string]any{
+		"suite_id": su.ID, "name": "Nightly suite", "kind": "once", "at": future(48 * time.Hour), "timezone": "UTC"})
+	wantStatus(t, rec, http.StatusCreated)
+	sc := decode[model.Schedule](t, rec)
+	if sc.SuiteID != su.ID || sc.SuiteName != "smoke" || sc.TestID != "" || sc.NextRunAt == nil {
+		t.Fatalf("created = %+v", sc)
+	}
+	list := decode[[]model.Schedule](t, e.json(t, "GET", "/api/schedules", nil))
+	if len(list) != 1 || list[0].SuiteName != "smoke" {
+		t.Fatalf("list = %+v", list)
+	}
+
+	rec = e.json(t, "POST", "/api/schedules/"+sc.ID+"/run-now", nil)
+	wantStatus(t, rec, http.StatusCreated)
+	resp := decode[struct {
+		SuiteRun model.SuiteRun `json:"suite_run"`
+	}](t, rec)
+	if resp.SuiteRun.ID == "" || resp.SuiteRun.SuiteID != su.ID || resp.SuiteRun.Label != "scheduled: Nightly suite" {
+		t.Fatalf("run-now = %s", rec.Body.String())
+	}
+	got, _ := st.GetSchedule(context.Background(), sc.ID)
+	if got.LastRunID != resp.SuiteRun.ID || got.LastStatus != model.ScheduleStarted {
+		t.Fatalf("schedule = %+v", got)
+	}
+	// The suite is running now: a second run-now is a 409.
+	wantAPIError(t, e.json(t, "POST", "/api/schedules/"+sc.ID+"/run-now", nil), http.StatusConflict, "suite is running")
 }

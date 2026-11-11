@@ -343,6 +343,8 @@ func (s *Service) Recover(ctx context.Context) (int, error) {
 
 // Start starts a run of the suite in the background and returns it
 // (status running).
+var _ scheduler.SuiteStarter = (*Service)(nil)
+
 func (s *Service) Start(ctx context.Context, id string, req model.StartSuiteRequest) (model.SuiteRun, error) {
 	label := strings.TrimSpace(req.Label)
 	if utf8.RuneCountInString(label) > MaxLabelLen {

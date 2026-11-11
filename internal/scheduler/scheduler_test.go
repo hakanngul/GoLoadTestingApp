@@ -456,10 +456,11 @@ func TestRunNow(t *testing.T) {
 	e := newEnv(t)
 	sc := e.create(t, daily3(nil))
 	e.run.setActive("other") // run-now ignores the overlap policy
-	run, err := e.s.RunNow(context.Background(), sc.ID)
-	if err != nil || run.ScheduleID != sc.ID {
-		t.Fatalf("RunNow = %+v, %v", run, err)
+	res, err := e.s.RunNow(context.Background(), sc.ID)
+	if err != nil || res.Run == nil || res.SuiteRun != nil || res.Run.ScheduleID != sc.ID {
+		t.Fatalf("RunNow = %+v, %v", res, err)
 	}
+	run := *res.Run
 	got := e.get(t, sc.ID)
 	if got.LastRunID != run.ID || !got.LastRunAt.Equal(t0) || !got.NextRunAt.Equal(*sc.NextRunAt) {
 		t.Fatalf("after run-now: %+v", got)

@@ -517,9 +517,14 @@ type LoadOverride struct {
 
 // ScheduleSpec is the user-editable part of a schedule.
 type ScheduleSpec struct {
-	TestID string       `json:"test_id"`
-	Name   string       `json:"name"`
-	Kind   ScheduleKind `json:"kind"`
+	// TestID is the test a run is started for. Exactly one of TestID and
+	// SuiteID is set.
+	TestID string `json:"test_id,omitempty"`
+	// SuiteID is the test suite a suite run is started for. A suite
+	// schedule has no Load and no Workers: the suite items carry their own.
+	SuiteID string       `json:"suite_id,omitempty"`
+	Name    string       `json:"name"`
+	Kind    ScheduleKind `json:"kind"`
 	// At is the local wall-clock time of a once schedule in Timezone,
 	// "YYYY-MM-DDTHH:MM".
 	At string `json:"at,omitempty"`
@@ -546,11 +551,14 @@ const (
 	ScheduleError   = "error"   // the run could not be started (LastMessage)
 )
 
-// Schedule starts runs of a test at planned times. GET /api/schedules.
+// Schedule starts runs of a test (or suite runs of a test suite) at
+// planned times. GET /api/schedules. LastRunID is a run ID, or a suite
+// run ID for a suite schedule.
 type Schedule struct {
 	ID string `json:"id"`
 	ScheduleSpec
-	TestName  string    `json:"test_name"` // filled on read
+	TestName  string    `json:"test_name"`            // filled on read; "" for a suite schedule
+	SuiteName string    `json:"suite_name,omitempty"` // filled on read; suite schedules only
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
