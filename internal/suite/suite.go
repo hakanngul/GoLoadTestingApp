@@ -364,7 +364,7 @@ func (s *Service) Start(ctx context.Context, id string, req model.StartSuiteRequ
 	}
 
 	run := model.SuiteRun{SuiteID: su.ID, SuiteName: su.Name, Status: model.RunRunning, Mode: su.Mode,
-		StopOnFailure: su.StopOnFailure, GapMs: su.GapMs, Label: label, StartedAt: s.now(),
+		StopOnFailure: su.StopOnFailure, GapMs: su.GapMs, Label: label, StartedBy: req.StartedBy, StartedAt: s.now(),
 		Items: make([]model.SuiteRunItem, 0, len(su.Items))}
 	for _, it := range su.Items {
 		run.Items = append(run.Items, model.SuiteRunItem{TestID: it.TestID, TestName: it.TestName,
@@ -569,7 +569,7 @@ func (s *Service) runItem(ctx context.Context, a *activeRun, i int) {
 	}
 	a.mu.Lock()
 	item := a.run.Items[i]
-	label, suiteName := a.run.Label, a.run.SuiteName
+	label, suiteName, startedBy := a.run.Label, a.run.SuiteName, a.run.StartedBy
 	a.mu.Unlock()
 
 	sctx, cancel := context.WithTimeout(context.Background(), startTimeout)
@@ -578,7 +578,7 @@ func (s *Service) runItem(ctx context.Context, a *activeRun, i int) {
 	case errors.Is(err, store.ErrNotFound):
 		err = errors.New("test was deleted")
 	case err == nil:
-		err = s.startItem(sctx, &item, test, label, suiteName)
+		err = s.startItem(sctx, &item, test, label, suiteName, startedBy)
 	}
 	cancel()
 	start := s.now()
@@ -608,8 +608,8 @@ func (s *Service) runItem(ctx context.Context, a *activeRun, i int) {
 
 // startItem starts the run of one item (with its load override applied
 // to a copy of the scenario) and fills item.RunID and item.Status.
-func (s *Service) startItem(ctx context.Context, item *model.SuiteRunItem, test model.Test, label, suiteName string) error {
-	req := model.StartRunRequest{Workers: item.Workers, Label: label}
+func (s *Service) startItem(ctx context.Context, item *model.SuiteRunItem, test model.Test, label, suiteName, startedBy string) error {
+	req := model.StartRunRequest{Workers: item.Workers, Label: label, StartedBy: startedBy}
 	if item.Load != nil {
 		y, err := scheduler.ApplyLoad(test.YAML, item.Load)
 		if err != nil {

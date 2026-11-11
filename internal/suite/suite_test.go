@@ -39,7 +39,7 @@ func (f *fakeRunner) Start(ctx context.Context, t model.Test, req model.StartRun
 		return model.Run{}, err
 	}
 	run, err := f.st.CreateRun(ctx, model.Run{TestID: t.ID, TestName: t.Name, Status: model.RunRunning,
-		StartedAt: time.Now(), Label: req.Label, Notes: req.Notes, Workers: req.Workers, YAML: t.YAML})
+		StartedAt: time.Now(), Label: req.Label, Notes: req.Notes, Workers: req.Workers, YAML: t.YAML, StartedBy: req.StartedBy})
 	if err != nil {
 		return model.Run{}, err
 	}
@@ -155,11 +155,11 @@ func TestSequentialAllPass(t *testing.T) {
 	if su.Mode != model.SuiteSequential || su.Items[1].TestName != "b" {
 		t.Fatalf("suite = %+v", su)
 	}
-	r, err := f.svc.Start(context.Background(), su.ID, model.StartSuiteRequest{Label: " v1 "})
+	r, err := f.svc.Start(context.Background(), su.ID, model.StartSuiteRequest{Label: " v1 ", StartedBy: "token:ci"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Status != model.RunRunning || r.Label != "v1" {
+	if r.Status != model.RunRunning || r.Label != "v1" || r.StartedBy != "token:ci" {
 		t.Fatalf("started = %+v", r)
 	}
 	got := f.waitDone(t, r.ID)
@@ -177,6 +177,9 @@ func TestSequentialAllPass(t *testing.T) {
 		run, _ := f.st.GetRun(context.Background(), it.RunID)
 		if run.Label != "v1" {
 			t.Fatalf("run label = %q", run.Label)
+		}
+		if run.StartedBy != "token:ci" { // item runs inherit the suite run's
+			t.Fatalf("run started_by = %q", run.StartedBy)
 		}
 	}
 	if got.FinishedAt == nil {

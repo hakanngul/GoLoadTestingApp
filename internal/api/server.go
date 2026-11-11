@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/report"
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
@@ -25,8 +26,10 @@ type Config struct {
 	Version string
 	// Logger receives request logs and internal errors. Nil discards logs.
 	Logger *slog.Logger
-	// AuthToken, when non-empty, requires "Authorization: Bearer <token>"
-	// on every /api/* route except /api/health. Because browsers cannot set
+	// AuthToken, when non-empty, is the master token: "Authorization: Bearer
+	// <token>" with admin scope on every /api/* route except /api/health.
+	// Scoped API tokens (store.TokenStore, /api/tokens) are accepted next
+	// to it. Because browsers cannot set
 	// headers on EventSource, the SSE stream route additionally accepts the
 	// token in the "access_token" query parameter.
 	AuthToken string
@@ -81,6 +84,12 @@ type server struct {
 	scheduler Scheduler
 	suites    Suites
 	notifier  NotificationSender
+	tokens    *tokenAuth // nil when the store has no store.TokenStore
+
+	// scopes maps every registered route pattern to the scope it needs.
+	scopes map[string]model.TokenScope
+	// patterns lists the registered route patterns in order.
+	patterns []string
 
 	// heartbeat is the SSE keep-alive interval (overridable in tests).
 	heartbeat time.Duration
@@ -119,76 +128,93 @@ func newServer(cfg Config) *server {
 		heartbeat: defaultHeartbeat,
 		trySem:    make(chan struct{}, maxConcurrentTries),
 		api:       http.NewServeMux(),
+		scopes:    make(map[string]model.TokenScope),
+	}
+	if ts, ok := cfg.Store.(store.TokenStore); ok {
+		s.tokens = newTokenAuth(ts)
 	}
 	s.routes()
 	return s
 }
 
+// handle registers one /api route and records the scope it needs (see
+// routeScope).
+func (s *server) handle(pattern string, h http.HandlerFunc) {
+	s.scopes[pattern] = routeScope(pattern)
+	s.patterns = append(s.patterns, pattern)
+	s.api.HandleFunc(pattern, h)
+}
+
 // routes registers every /api route on s.api.
 func (s *server) routes() {
-	m := s.api
-	m.HandleFunc("GET /api/health", s.handleHealth)
+	s.handle("GET /api/health", s.handleHealth)
+	s.handle("GET /api/me", s.handleMe)
 
-	m.HandleFunc("GET /api/tests", s.handleListTests)
-	m.HandleFunc("POST /api/tests", s.handleCreateTest)
-	m.HandleFunc("GET /api/tests/{id}", s.handleGetTest)
-	m.HandleFunc("PUT /api/tests/{id}", s.handleUpdateTest)
-	m.HandleFunc("DELETE /api/tests/{id}", s.handleDeleteTest)
-	m.HandleFunc("PUT /api/tests/{id}/files/{name}", s.handlePutFile)
-	m.HandleFunc("DELETE /api/tests/{id}/files/{name}", s.handleDeleteFile)
-	m.HandleFunc("POST /api/validate", s.handleValidate)
-	m.HandleFunc("POST /api/tests/try", s.handleTry)
+	// API tokens (admin only; 409 while auth is disabled).
+	s.handle("GET /api/tokens", s.handleListTokens)
+	s.handle("POST /api/tokens", s.handleCreateToken)
+	s.handle("DELETE /api/tokens/{id}", s.handleDeleteToken)
 
-	m.HandleFunc("POST /api/tests/{id}/runs", s.handleStartRun)
-	m.HandleFunc("GET /api/runs", s.handleListRuns)
-	m.HandleFunc("GET /api/runs/{id}", s.handleGetRun)
-	m.HandleFunc("POST /api/runs/{id}/stop", s.handleStopRun)
-	m.HandleFunc("GET /api/runs/{id}/metrics", s.handleRunMetrics)
-	m.HandleFunc("GET /api/runs/{id}/errors", s.handleRunErrors)
-	m.HandleFunc("GET /api/runs/{id}/error-groups", s.handleRunErrorGroups)
-	m.HandleFunc("GET /api/runs/{id}/stream", s.handleStream)
+	s.handle("GET /api/tests", s.handleListTests)
+	s.handle("POST /api/tests", s.handleCreateTest)
+	s.handle("GET /api/tests/{id}", s.handleGetTest)
+	s.handle("PUT /api/tests/{id}", s.handleUpdateTest)
+	s.handle("DELETE /api/tests/{id}", s.handleDeleteTest)
+	s.handle("PUT /api/tests/{id}/files/{name}", s.handlePutFile)
+	s.handle("DELETE /api/tests/{id}/files/{name}", s.handleDeleteFile)
+	s.handle("POST /api/validate", s.handleValidate)
+	s.handle("POST /api/tests/try", s.handleTry)
 
-	m.HandleFunc("GET /api/workers", s.handleWorkers)
+	s.handle("POST /api/tests/{id}/runs", s.handleStartRun)
+	s.handle("GET /api/runs", s.handleListRuns)
+	s.handle("GET /api/runs/{id}", s.handleGetRun)
+	s.handle("POST /api/runs/{id}/stop", s.handleStopRun)
+	s.handle("GET /api/runs/{id}/metrics", s.handleRunMetrics)
+	s.handle("GET /api/runs/{id}/errors", s.handleRunErrors)
+	s.handle("GET /api/runs/{id}/error-groups", s.handleRunErrorGroups)
+	s.handle("GET /api/runs/{id}/stream", s.handleStream)
+
+	s.handle("GET /api/workers", s.handleWorkers)
 
 	// Reporting.
-	m.HandleFunc("PATCH /api/runs/{id}", s.handleUpdateRun)
-	m.HandleFunc("DELETE /api/runs/{id}", s.handleDeleteRun)
-	m.HandleFunc("GET /api/runs/{id}/report", s.handleRunReport)
-	m.HandleFunc("GET /api/runs/{id}/report.html", s.handleRunReportHTML)
-	m.HandleFunc("GET /api/runs/{id}/export.csv", s.handleExportCSV)
-	m.HandleFunc("GET /api/runs/{id}/export.json", s.handleExportJSON)
-	m.HandleFunc("GET /api/compare", s.handleCompare)
-	m.HandleFunc("GET /api/tests/{id}/trend", s.handleTrend)
-	m.HandleFunc("PUT /api/tests/{id}/baseline", s.handleSetBaseline)
-	m.HandleFunc("GET /api/reports/overview", s.handleOverview)
+	s.handle("PATCH /api/runs/{id}", s.handleUpdateRun)
+	s.handle("DELETE /api/runs/{id}", s.handleDeleteRun)
+	s.handle("GET /api/runs/{id}/report", s.handleRunReport)
+	s.handle("GET /api/runs/{id}/report.html", s.handleRunReportHTML)
+	s.handle("GET /api/runs/{id}/export.csv", s.handleExportCSV)
+	s.handle("GET /api/runs/{id}/export.json", s.handleExportJSON)
+	s.handle("GET /api/compare", s.handleCompare)
+	s.handle("GET /api/tests/{id}/trend", s.handleTrend)
+	s.handle("PUT /api/tests/{id}/baseline", s.handleSetBaseline)
+	s.handle("GET /api/reports/overview", s.handleOverview)
 
 	// Schedules.
-	m.HandleFunc("GET /api/schedules", s.handleListSchedules)
-	m.HandleFunc("POST /api/schedules", s.handleCreateSchedule)
-	m.HandleFunc("POST /api/schedules/preview", s.handlePreviewSchedule)
-	m.HandleFunc("GET /api/schedules/{id}", s.handleGetSchedule)
-	m.HandleFunc("PUT /api/schedules/{id}", s.handleUpdateSchedule)
-	m.HandleFunc("DELETE /api/schedules/{id}", s.handleDeleteSchedule)
-	m.HandleFunc("POST /api/schedules/{id}/run-now", s.handleRunScheduleNow)
+	s.handle("GET /api/schedules", s.handleListSchedules)
+	s.handle("POST /api/schedules", s.handleCreateSchedule)
+	s.handle("POST /api/schedules/preview", s.handlePreviewSchedule)
+	s.handle("GET /api/schedules/{id}", s.handleGetSchedule)
+	s.handle("PUT /api/schedules/{id}", s.handleUpdateSchedule)
+	s.handle("DELETE /api/schedules/{id}", s.handleDeleteSchedule)
+	s.handle("POST /api/schedules/{id}/run-now", s.handleRunScheduleNow)
 
 	// Test suites.
-	m.HandleFunc("GET /api/suites", s.withSuites(s.handleListSuites))
-	m.HandleFunc("POST /api/suites", s.withSuites(s.handleCreateSuite))
-	m.HandleFunc("GET /api/suites/{id}", s.withSuites(s.handleGetSuite))
-	m.HandleFunc("PUT /api/suites/{id}", s.withSuites(s.handleUpdateSuite))
-	m.HandleFunc("DELETE /api/suites/{id}", s.withSuites(s.handleDeleteSuite))
-	m.HandleFunc("POST /api/suites/{id}/runs", s.withSuites(s.handleStartSuite))
-	m.HandleFunc("GET /api/suites/{id}/runs", s.withSuites(s.handleListSuiteRuns))
-	m.HandleFunc("GET /api/suite-runs", s.withSuites(s.handleListSuiteRuns))
-	m.HandleFunc("GET /api/suite-runs/{id}", s.withSuites(s.handleGetSuiteRun))
-	m.HandleFunc("POST /api/suite-runs/{id}/stop", s.withSuites(s.handleStopSuiteRun))
+	s.handle("GET /api/suites", s.withSuites(s.handleListSuites))
+	s.handle("POST /api/suites", s.withSuites(s.handleCreateSuite))
+	s.handle("GET /api/suites/{id}", s.withSuites(s.handleGetSuite))
+	s.handle("PUT /api/suites/{id}", s.withSuites(s.handleUpdateSuite))
+	s.handle("DELETE /api/suites/{id}", s.withSuites(s.handleDeleteSuite))
+	s.handle("POST /api/suites/{id}/runs", s.withSuites(s.handleStartSuite))
+	s.handle("GET /api/suites/{id}/runs", s.withSuites(s.handleListSuiteRuns))
+	s.handle("GET /api/suite-runs", s.withSuites(s.handleListSuiteRuns))
+	s.handle("GET /api/suite-runs/{id}", s.withSuites(s.handleGetSuiteRun))
+	s.handle("POST /api/suite-runs/{id}/stop", s.withSuites(s.handleStopSuiteRun))
 
 	// Notification channels.
-	m.HandleFunc("GET /api/notifications", s.handleListNotifications)
-	m.HandleFunc("POST /api/notifications", s.handleCreateNotification)
-	m.HandleFunc("PUT /api/notifications/{id}", s.handleUpdateNotification)
-	m.HandleFunc("DELETE /api/notifications/{id}", s.handleDeleteNotification)
-	m.HandleFunc("POST /api/notifications/{id}/test", s.handleTestNotification)
+	s.handle("GET /api/notifications", s.handleListNotifications)
+	s.handle("POST /api/notifications", s.handleCreateNotification)
+	s.handle("PUT /api/notifications/{id}", s.handleUpdateNotification)
+	s.handle("DELETE /api/notifications/{id}", s.handleDeleteNotification)
+	s.handle("POST /api/notifications/{id}/test", s.handleTestNotification)
 }
 
 // handler assembles the middleware chain:

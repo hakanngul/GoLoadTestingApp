@@ -277,7 +277,7 @@ func (s *Scheduler) handleDue(ctx context.Context, sc model.Schedule, now time.T
 	default:
 		adv.Result = store.ScheduleResult{At: due, Status: model.ScheduleStarted}
 		if s.advance(ctx, sc, due, adv) {
-			_, _ = s.start(ctx, sc, due)
+			_, _ = s.start(ctx, sc, due, ScheduleStartedBy(sc))
 		}
 		s.startMu.Unlock()
 	}
@@ -332,7 +332,7 @@ func (s *Scheduler) waitAndStart(ctx context.Context, sc model.Schedule, due, de
 		default:
 			s.startMu.Lock()
 			if !s.busy() {
-				_, _ = s.start(ctx, cur, due)
+				_, _ = s.start(ctx, cur, due, ScheduleStartedBy(cur))
 				s.startMu.Unlock()
 				return
 			}
@@ -359,10 +359,19 @@ func (s *Scheduler) result(ctx context.Context, id string, r store.ScheduleResul
 	}
 }
 
+// ScheduleStartedBy is the Run.StartedBy value of a timed fire of sc:
+// "schedule:<name>" (the ID when the schedule has no name).
+func ScheduleStartedBy(sc model.Schedule) string {
+	if sc.Name != "" {
+		return "schedule:" + sc.Name
+	}
+	return "schedule:" + sc.ID
+}
+
 // start starts a run of sc's test (or a suite run of its suite) with its
 // overrides and records the outcome as the schedule's last result (at =
 // due time or run-now time).
-func (s *Scheduler) start(ctx context.Context, sc model.Schedule, at time.Time) (RunResult, error) {
+func (s *Scheduler) start(ctx context.Context, sc model.Schedule, at time.Time, startedBy string) (RunResult, error) {
 	var (
 		res RunResult
 		id  string
@@ -370,12 +379,12 @@ func (s *Scheduler) start(ctx context.Context, sc model.Schedule, at time.Time) 
 	)
 	if sc.SuiteID != "" {
 		var sr model.SuiteRun
-		if sr, err = s.startSuite(ctx, sc); err == nil {
+		if sr, err = s.startSuite(ctx, sc, startedBy); err == nil {
 			res.SuiteRun, id = &sr, sr.ID
 		}
 	} else {
 		var run model.Run
-		if run, err = s.startRun(ctx, sc); err == nil {
+		if run, err = s.startRun(ctx, sc, startedBy); err == nil {
 			res.Run, id = &run, run.ID
 		}
 	}
@@ -390,16 +399,16 @@ func (s *Scheduler) start(ctx context.Context, sc model.Schedule, at time.Time) 
 	return res, err
 }
 
-func (s *Scheduler) startSuite(ctx context.Context, sc model.Schedule) (model.SuiteRun, error) {
+func (s *Scheduler) startSuite(ctx context.Context, sc model.Schedule, startedBy string) (model.SuiteRun, error) {
 	if s.suites == nil {
 		return model.SuiteRun{}, errors.New("test suites are not available on this server")
 	}
 	sctx, cancel := context.WithTimeout(ctx, startTimeout)
 	defer cancel()
-	return s.suites.Start(sctx, sc.SuiteID, model.StartSuiteRequest{Label: RunLabel(sc.ScheduleSpec)})
+	return s.suites.Start(sctx, sc.SuiteID, model.StartSuiteRequest{Label: RunLabel(sc.ScheduleSpec), StartedBy: startedBy})
 }
 
-func (s *Scheduler) startRun(ctx context.Context, sc model.Schedule) (model.Run, error) {
+func (s *Scheduler) startRun(ctx context.Context, sc model.Schedule, startedBy string) (model.Run, error) {
 	sctx, cancel := context.WithTimeout(ctx, startTimeout)
 	defer cancel()
 	test, err := s.st.GetTest(sctx, sc.TestID)
@@ -412,7 +421,7 @@ func (s *Scheduler) startRun(ctx context.Context, sc model.Schedule) (model.Run,
 	}
 	test.YAML = y
 	return s.runner.Start(sctx, test, model.StartRunRequest{
-		Workers: sc.Workers, Label: RunLabel(sc.ScheduleSpec), Notes: sc.Notes, ScheduleID: sc.ID,
+		Workers: sc.Workers, Label: RunLabel(sc.ScheduleSpec), Notes: sc.Notes, ScheduleID: sc.ID, StartedBy: startedBy,
 	})
 }
 
@@ -518,7 +527,8 @@ func (s *Scheduler) RunNow(ctx context.Context, id string) (RunResult, error) {
 	}
 	s.startMu.Lock()
 	defer s.startMu.Unlock()
-	return s.start(ctx, sc, s.now())
+	// The caller (API identity in ctx), not the schedule, started this run.
+	return s.start(ctx, sc, s.now(), model.StartedByFrom(ctx))
 }
 
 // Preview returns the next fire times of a definition.

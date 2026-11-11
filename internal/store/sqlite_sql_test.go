@@ -31,6 +31,9 @@ func TestSQLiteQueryLiteralsMatchFragments(t *testing.T) {
 		{"ListSuites", sqliteListSuitesSQL, sqliteSuiteCols},
 		{"GetSuiteRun", sqliteGetSuiteRunSQL, sqliteSuiteRunCols},
 		{"ListSuiteRuns", sqliteListSuiteRunsSQL, sqliteSuiteRunCols},
+		{"ListTokens", sqliteListTokensSQL, sqliteTokenCols},
+		{"GetToken", sqliteGetTokenSQL, sqliteTokenCols},
+		{"TokenByHash", sqliteTokenByHashSQL, sqliteTokenCols},
 	}
 	for _, c := range cases {
 		if !strings.Contains(norm(c.query), norm(c.fragment)) {

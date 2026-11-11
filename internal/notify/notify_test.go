@@ -100,6 +100,18 @@ func TestSlackRunMessage(t *testing.T) {
 	}
 }
 
+func TestMessageIncludesStartedBy(t *testing.T) {
+	n := New(Options{Store: store.NewMemory()})
+	got := n.runText(model.Run{ID: "r1", TestName: "checkout", Status: model.RunPassed, StartedBy: "token:kiro-hakan"})
+	if want := "GoLoad: run PASSED — checkout · started by token:kiro-hakan"; got != want {
+		t.Fatalf("run text = %q, want %q", got, want)
+	}
+	got = n.suiteText(model.SuiteRun{ID: "s1", SuiteName: "smoke", Status: model.RunPassed, StartedBy: "schedule:nightly"})
+	if !strings.Contains(got, "started by schedule:nightly") {
+		t.Fatalf("suite text = %q", got)
+	}
+}
+
 func TestSlackSuiteMessageAndNoLinkWithoutBase(t *testing.T) {
 	st := store.NewMemory()
 	var r recv
