@@ -66,6 +66,9 @@ type Run struct {
 	// hand). It is set when the run is created and never changes; the
 	// schedule may have been deleted since.
 	ScheduleID string `json:"schedule_id,omitempty"`
+	// Pinned protects the run from retention pruning (set by the user via
+	// PATCH /api/runs/{id}). Deleting the run by hand still works.
+	Pinned bool `json:"pinned,omitempty"`
 }
 
 // Summary is an aggregate over a time window (whole run or one step).
@@ -304,8 +307,9 @@ type StartRunRequest struct {
 
 // UpdateRunRequest is the body of PATCH /api/runs/{id}; nil = unchanged.
 type UpdateRunRequest struct {
-	Label *string `json:"label,omitempty"`
-	Notes *string `json:"notes,omitempty"`
+	Label  *string `json:"label,omitempty"`
+	Notes  *string `json:"notes,omitempty"`
+	Pinned *bool   `json:"pinned,omitempty"`
 }
 
 // ---- Reporting ----
@@ -334,6 +338,17 @@ type RunReport struct {
 	Summary    Summary           `json:"summary"`            // over Window (incl. by_step)
 	Thresholds []ThresholdResult `json:"thresholds"`         // re-evaluated over Window
 	Baseline   *Comparison       `json:"baseline,omitempty"` // vs the test's baseline run, same window kind
+	// Histogram is the latency distribution of Window (all steps), from the
+	// merged HDR histograms; omitted when no snapshots were available.
+	Histogram []HistBucket `json:"histogram,omitempty"`
+}
+
+// HistBucket is one bucket of a latency distribution: Count requests took
+// [FromMs, ToMs) milliseconds. Buckets are log-spaced and ordered.
+type HistBucket struct {
+	FromMs float64 `json:"from_ms"`
+	ToMs   float64 `json:"to_ms"`
+	Count  int64   `json:"count"`
 }
 
 // Verdict classifies a metric change between a reference and a candidate.

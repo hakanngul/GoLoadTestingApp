@@ -37,14 +37,14 @@ func testRunMeta(t *testing.T, s Store) {
 	}
 
 	// Partial updates.
-	out, err := s.UpdateRunMeta(c, r.ID, strp("v2"), nil)
+	out, err := s.UpdateRunMeta(c, r.ID, strp("v2"), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out.Label != "v2" || out.Notes != "first <try>" || out.Status != model.RunPassed {
 		t.Fatalf("UpdateRunMeta(label) = %+v", out)
 	}
-	out, err = s.UpdateRunMeta(c, r.ID, nil, strp(""))
+	out, err = s.UpdateRunMeta(c, r.ID, nil, strp(""), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func testRunMeta(t *testing.T, s Store) {
 	}
 
 	for _, id := range []string{missingID, "bad"} {
-		_, err := s.UpdateRunMeta(c, id, strp("x"), nil)
+		_, err := s.UpdateRunMeta(c, id, strp("x"), nil, nil)
 		wantErr(t, "UpdateRunMeta unknown", err, ErrNotFound)
 	}
 }

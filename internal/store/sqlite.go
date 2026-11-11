@@ -233,20 +233,20 @@ type sqliteQuerier interface {
 const (
 	sqliteRunColsBare = `id, test_id, test_name, status, yaml, workers,
 	started_at, finished_at, summary, thresholds, peak_cpu, warnings, error,
-	label, notes, schedule_id`
+	label, notes, schedule_id, pinned`
 	sqliteRunColsR = `r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes, r.schedule_id`
+	r.label, r.notes, r.schedule_id, r.pinned`
 	sqliteRunColsLR = `lr.id, lr.test_id, lr.test_name, lr.status, lr.yaml, lr.workers,
 	lr.started_at, lr.finished_at, lr.summary, lr.thresholds, lr.peak_cpu, lr.warnings, lr.error,
-	lr.label, lr.notes, lr.schedule_id`
+	lr.label, lr.notes, lr.schedule_id, lr.pinned`
 	// sqliteRunColsSlimR is sqliteRunColsR with the summary's by_step
 	// removed (RunsSince).
 	sqliteRunColsSlimR = `r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at,
 	CASE WHEN json_type(r.summary) = 'object' THEN json_remove(r.summary, '$.by_step') ELSE r.summary END,
 	r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes, r.schedule_id`
+	r.label, r.notes, r.schedule_id, r.pinned`
 )
 
 // sqliteRunRow receives one runs row. Every field is nullable so the same
@@ -258,12 +258,13 @@ type sqliteRunRow struct {
 	summary, thresholds, warnings      sql.NullString
 	peakCPU                            sql.NullFloat64
 	errText, label, notes, scheduleID  sql.NullString
+	pinned                             sql.NullInt64
 }
 
 func (r *sqliteRunRow) dest() []any {
 	return []any{&r.id, &r.testID, &r.testName, &r.status, &r.yaml, &r.workers,
 		&r.startedAt, &r.finishedAt, &r.summary, &r.thresholds, &r.peakCPU, &r.warnings, &r.errText,
-		&r.label, &r.notes, &r.scheduleID}
+		&r.label, &r.notes, &r.scheduleID, &r.pinned}
 }
 
 // run converts a scanned row; ok is false when the row was all NULL.
@@ -283,6 +284,7 @@ func (r *sqliteRunRow) run() (model.Run, bool, error) {
 		Label:      r.label.String,
 		Notes:      r.notes.String,
 		ScheduleID: r.scheduleID.String,
+		Pinned:     r.pinned.Int64 != 0,
 		Thresholds: []model.ThresholdResult{},
 		Warnings:   []string{},
 	}
@@ -379,7 +381,7 @@ const sqliteListTestsSQL = `
 	(SELECT json_group_array(json_object('name', f.name, 'size', f.size) ORDER BY f.name)
 	 FROM test_files f WHERE f.test_id = t.id), lr.id, lr.test_id, lr.test_name, lr.status, lr.yaml, lr.workers,
 	lr.started_at, lr.finished_at, lr.summary, lr.thresholds, lr.peak_cpu, lr.warnings, lr.error,
-	lr.label, lr.notes, lr.schedule_id
+	lr.label, lr.notes, lr.schedule_id, lr.pinned
 		FROM tests t
 		LEFT JOIN runs lr ON lr.id = (
 			SELECT r.id FROM runs r WHERE r.test_id = t.id
@@ -588,7 +590,7 @@ const sqliteCreateRunSQL = `
 		FROM tests t WHERE t.id = ?
 		RETURNING id, test_id, test_name, status, yaml, workers,
 	started_at, finished_at, summary, thresholds, peak_cpu, warnings, error,
-	label, notes, schedule_id`
+	label, notes, schedule_id, pinned`
 
 // CreateRun stores a new run for an existing test. The store assigns the
 // ID; StartedAt defaults to now, Status to queued and TestName to the
@@ -633,24 +635,24 @@ func (s *SQLite) UpdateRun(ctx context.Context, r model.Run) error {
 const (
 	sqliteGetRunSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes, r.schedule_id FROM runs r WHERE r.id = ?`
+	r.label, r.notes, r.schedule_id, r.pinned FROM runs r WHERE r.id = ?`
 	sqliteListRunsSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes, r.schedule_id FROM runs r
+	r.label, r.notes, r.schedule_id, r.pinned FROM runs r
 			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`
 	sqliteListTestRunsSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at, r.summary, r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes, r.schedule_id FROM runs r WHERE r.test_id = ?
+	r.label, r.notes, r.schedule_id, r.pinned FROM runs r WHERE r.test_id = ?
 			ORDER BY r.started_at DESC, r.id DESC LIMIT ?`
-	sqliteUpdateRunMetaSQL = `UPDATE runs SET label = COALESCE(?, label), notes = COALESCE(?, notes)
+	sqliteUpdateRunMetaSQL = `UPDATE runs SET label = COALESCE(?, label), notes = COALESCE(?, notes), pinned = COALESCE(?, pinned)
 		WHERE id = ? RETURNING id, test_id, test_name, status, yaml, workers,
 	started_at, finished_at, summary, thresholds, peak_cpu, warnings, error,
-	label, notes, schedule_id`
+	label, notes, schedule_id, pinned`
 	sqliteRunsSinceSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.yaml, r.workers,
 	r.started_at, r.finished_at,
 	CASE WHEN json_type(r.summary) = 'object' THEN json_remove(r.summary, '$.by_step') ELSE r.summary END,
 	r.thresholds, r.peak_cpu, r.warnings, r.error,
-	r.label, r.notes, r.schedule_id FROM runs r WHERE r.started_at >= ?
+	r.label, r.notes, r.schedule_id, r.pinned FROM runs r WHERE r.started_at >= ?
 		ORDER BY r.started_at DESC, r.id DESC`
 )
 
@@ -708,13 +710,20 @@ func (s *SQLite) MarkInterrupted(ctx context.Context, msg string) (int, error) {
 	return int(n), nil
 }
 
-// UpdateRunMeta sets label and/or notes (nil = unchanged).
-func (s *SQLite) UpdateRunMeta(ctx context.Context, id string, label, notes *string) (model.Run, error) {
+// UpdateRunMeta sets label, notes and/or pinned (nil = unchanged).
+func (s *SQLite) UpdateRunMeta(ctx context.Context, id string, label, notes *string, pinned *bool) (model.Run, error) {
 	if !isUUID(id) {
 		return model.Run{}, ErrNotFound
 	}
+	var pin *int
+	if pinned != nil {
+		pin = new(int)
+		if *pinned {
+			*pin = 1
+		}
+	}
 	var rr sqliteRunRow
-	err := s.w.QueryRowContext(ctx, sqliteUpdateRunMetaSQL, label, notes, id).Scan(rr.dest()...)
+	err := s.w.QueryRowContext(ctx, sqliteUpdateRunMetaSQL, label, notes, pin, id).Scan(rr.dest()...)
 	if err != nil {
 		return model.Run{}, sqliteErr(err)
 	}

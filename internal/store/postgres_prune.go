@@ -16,7 +16,7 @@ import (
 
 // pgPrunable is the WHERE condition (alias r for runs) selecting
 // prunable runs; $1 is the cutoff.
-const pgPrunable = `r.status NOT IN ('queued', 'running')
+const pgPrunable = `r.status NOT IN ('queued', 'running') AND NOT r.pinned
 	AND COALESCE(r.finished_at, r.started_at) < $1
 	AND NOT EXISTS (SELECT 1 FROM tests t WHERE t.baseline_run_id = r.id)
 	AND r.id <> (SELECT l.id FROM runs l
@@ -25,7 +25,7 @@ const pgPrunable = `r.status NOT IN ('queued', 'running')
 
 var _ Pruner = (*Postgres)(nil)
 
-// PruneRuns deletes old finished runs except baselines and each test's
+// PruneRuns deletes old finished runs except pinned runs, baselines and each test's
 // latest finished run (see Pruner) in one statement; metrics, error
 // samples and error groups cascade.
 func (p *Postgres) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool) ([]PrunedRun, error) {

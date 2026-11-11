@@ -65,6 +65,7 @@ type htmlReport struct {
 	WindowText  string
 	Steps       []namedSummary
 	Charts      []svgChart
+	Hist        svgHist
 	BaseSteps   []namedDeltas
 	Errors      []model.ErrorSample
 	ErrorsTotal int
@@ -107,15 +108,17 @@ func newHTMLReport(rep model.RunReport, pts []model.MetricPoint, samples []model
 	}
 	h.Charts = []svgChart{
 		buildChart("Throughput (requests/s)", pts, rep.Window, []seriesDef{
-			{"rps", "#2563eb", func(p model.MetricPoint) float64 { return p.RPS }},
-			{"target", "#9ca3af", func(p model.MetricPoint) float64 { return p.TargetRate }},
+			{"rps", "#2563eb", func(p model.MetricPoint) float64 { return p.RPS }, false},
+			{"target", "#9ca3af", func(p model.MetricPoint) float64 { return p.TargetRate }, false},
 		}),
 		buildChart("Latency (ms)", pts, rep.Window, []seriesDef{
-			{"p50", "#16a34a", func(p model.MetricPoint) float64 { return p.P50Ms }},
-			{"p95", "#d97706", func(p model.MetricPoint) float64 { return p.P95Ms }},
-			{"p99", "#dc2626", func(p model.MetricPoint) float64 { return p.P99Ms }},
+			{"p50", "#16a34a", func(p model.MetricPoint) float64 { return p.P50Ms }, false},
+			{"p95", "#d97706", func(p model.MetricPoint) float64 { return p.P95Ms }, false},
+			{"p99", "#dc2626", func(p model.MetricPoint) float64 { return p.P99Ms }, false},
+			{"active VUs", "#7c3aed", func(p model.MetricPoint) float64 { return float64(p.Active) }, true},
 		}),
 	}
+	h.Hist = buildHist(rep.Histogram, rep.Summary)
 	h.Errors = samples
 	if len(h.Errors) > maxHTMLErrors {
 		h.Errors = h.Errors[:maxHTMLErrors]
@@ -129,6 +132,7 @@ type seriesDef struct {
 	name  string
 	color string
 	get   func(model.MetricPoint) float64
+	right bool // plotted on the secondary (right) y axis, dashed
 }
 
 type svgChart struct {
@@ -136,6 +140,7 @@ type svgChart struct {
 	W, H           float64
 	X0, Y0, X1, Y1 float64 // plot area (Y0 top, Y1 bottom)
 	XTicks, YTicks []svgTick
+	RTicks         []svgTick // right axis labels (secondary series), if any
 	Series         []svgSeries
 	BandX, BandW   float64 // report window highlight (BandW 0 = none)
 	Empty          bool
@@ -149,6 +154,7 @@ type svgTick struct {
 type svgSeries struct {
 	Name, Color, Points string
 	LegendX             float64
+	Dashed              bool
 }
 
 func buildChart(title string, pts []model.MetricPoint, win model.Window, defs []seriesDef) svgChart {
@@ -157,12 +163,23 @@ func buildChart(title string, pts []model.MetricPoint, win model.Window, defs []
 		c.Empty = true
 		return c
 	}
-	xMax, yMax := 0.0, 0.0
+	hasRight := false
+	for _, d := range defs {
+		hasRight = hasRight || d.right
+	}
+	if hasRight {
+		c.X1 = 700 // room for the right axis labels
+	}
+	xMax, yMax, rMax := 0.0, 0.0, 0.0
 	for _, p := range pts {
 		xMax = math.Max(xMax, p.Elapsed)
 		for _, d := range defs {
 			if v := d.get(p); !math.IsNaN(v) && !math.IsInf(v, 0) {
-				yMax = math.Max(yMax, v)
+				if d.right {
+					rMax = math.Max(rMax, v)
+				} else {
+					yMax = math.Max(yMax, v)
+				}
 			}
 		}
 	}
@@ -177,6 +194,14 @@ func buildChart(title string, pts []model.MetricPoint, win model.Window, defs []
 	xStep := niceStep(xMax / 6)
 	sx := func(v float64) float64 { return c.X0 + v/xMax*(c.X1-c.X0) }
 	sy := func(v float64) float64 { return c.Y1 - v/yTop*(c.Y1-c.Y0) }
+	rTop := 1.0
+	if hasRight {
+		rStep := niceStep(math.Max(rMax, 1e-9) / 4)
+		rTop = math.Max(rStep, math.Ceil(rMax/rStep)*rStep)
+		for v := 0.0; v <= rTop+1e-9; v += rStep {
+			c.RTicks = append(c.RTicks, svgTick{Pos: c.Y1 - v/rTop*(c.Y1-c.Y0), Label: fnum(v, -1)})
+		}
+	}
 	for v := 0.0; v <= xMax+1e-9; v += xStep {
 		c.XTicks = append(c.XTicks, svgTick{Pos: sx(v), Label: fnum(v, -1) + "s"})
 	}
@@ -194,12 +219,110 @@ func buildChart(title string, pts []model.MetricPoint, win model.Window, defs []
 			if math.IsNaN(v) || math.IsInf(v, 0) {
 				continue
 			}
-			fmt.Fprintf(&b, "%.1f,%.1f ", sx(p.Elapsed), sy(v))
+			y := sy(v)
+			if d.right {
+				y = c.Y1 - v/rTop*(c.Y1-c.Y0)
+			}
+			fmt.Fprintf(&b, "%.1f,%.1f ", sx(p.Elapsed), y)
 		}
-		c.Series = append(c.Series, svgSeries{Name: d.name, Color: d.color,
-			Points: strings.TrimSpace(b.String()), LegendX: c.X1 - float64(len(defs)-i)*70})
+		c.Series = append(c.Series, svgSeries{Name: d.name, Color: d.color, Dashed: d.right,
+			Points: strings.TrimSpace(b.String()), LegendX: c.X1 - float64(len(defs)-i)*78})
 	}
 	return c
+}
+
+// ---- latency histogram --------------------------------------------------------
+
+type svgHist struct {
+	W, H           float64
+	X0, Y0, X1, Y1 float64
+	Bars           []svgBar
+	XTicks, YTicks []svgTick
+	Marks          []svgMark
+	Empty          bool
+}
+
+type svgBar struct {
+	X, Y, W, H float64
+	Title      string
+}
+
+type svgMark struct {
+	Name, Color string
+	X           float64
+	LabelY      float64
+}
+
+// buildHist draws the (log-spaced, equal-width) buckets as bars with the
+// p50/p95/p99 of sum as vertical markers.
+func buildHist(buckets []model.HistBucket, sum model.Summary) svgHist {
+	c := svgHist{W: 760, H: 240, X0: 56, Y0: 28, X1: 744, Y1: 196}
+	if len(buckets) == 0 {
+		c.Empty = true
+		return c
+	}
+	var cMax, total int64
+	for _, b := range buckets {
+		cMax = max(cMax, b.Count)
+		total += b.Count
+	}
+	yStep := niceStep(float64(max(cMax, 1)) / 4)
+	yTop := math.Max(yStep, math.Ceil(float64(cMax)/yStep)*yStep)
+	n := float64(len(buckets))
+	bw := (c.X1 - c.X0) / n
+	for i, b := range buckets {
+		h := float64(b.Count) / yTop * (c.Y1 - c.Y0)
+		pct := 0.0
+		if total > 0 {
+			pct = float64(b.Count) / float64(total) * 100
+		}
+		c.Bars = append(c.Bars, svgBar{X: c.X0 + float64(i)*bw + 0.5, Y: c.Y1 - h, W: math.Max(bw-1, 0.5), H: h,
+			Title: fmt.Sprintf("%s–%s ms: %d (%s%%)", fnum(b.FromMs, 2), fnum(b.ToMs, 2), b.Count, fnum(pct, 1))})
+	}
+	for v := 0.0; v <= yTop+1e-9; v += yStep {
+		c.YTicks = append(c.YTicks, svgTick{Pos: c.Y1 - v/yTop*(c.Y1-c.Y0), Label: fnum(v, -1)})
+	}
+	// X labels at bucket edges, at most ~7.
+	stride := max(1, int(math.Ceil(n/6)))
+	for i := 0; i <= len(buckets); i += stride {
+		ms := buckets[min(i, len(buckets)-1)].FromMs
+		if i == len(buckets) {
+			ms = buckets[len(buckets)-1].ToMs
+		}
+		c.XTicks = append(c.XTicks, svgTick{Pos: c.X0 + float64(i)*bw, Label: fmtHistMs(ms)})
+	}
+	// Percentile markers: position by log-interpolation inside the bucket.
+	pos := func(v float64) (float64, bool) {
+		for i, b := range buckets {
+			if v >= b.FromMs && (v < b.ToMs || i == len(buckets)-1) && b.ToMs > b.FromMs {
+				f := math.Min(1, math.Log(v/b.FromMs)/math.Log(b.ToMs/b.FromMs))
+				return c.X0 + (float64(i)+f)*bw, true
+			}
+		}
+		return 0, false
+	}
+	for i, m := range []struct {
+		name, color string
+		v           float64
+	}{{"p50", "#16a34a", sum.P50Ms}, {"p95", "#d97706", sum.P95Ms}, {"p99", "#dc2626", sum.P99Ms}} {
+		if x, ok := pos(math.Max(m.v, buckets[0].FromMs)); ok {
+			c.Marks = append(c.Marks, svgMark{Name: m.name, Color: m.color, X: x, LabelY: c.Y0 + 10 + float64(i)*12})
+		}
+	}
+	return c
+}
+
+// fmtHistMs formats a millisecond edge compactly (1.5ms, 120ms, 2.3s).
+func fmtHistMs(v float64) string {
+	switch {
+	case v >= 1000:
+		return fnum(v/1000, 2) + "s"
+	case v >= 100:
+		return fnum(v, 0)
+	case v >= 10:
+		return fnum(v, 1)
+	}
+	return fnum(v, 2)
 }
 
 // niceStep rounds raw up to 1, 2 or 5 times a power of ten.
@@ -366,11 +489,23 @@ footer { margin-top: 40px; color: #9ca3af; font-size: 12px; }
   {{$c := .}}{{range .YTicks}}<line x1="{{$c.X0}}" x2="{{$c.X1}}" y1="{{f1 .Pos}}" y2="{{f1 .Pos}}" stroke="#e5e7eb"/><text x="{{sub $c.X0 6}}" y="{{f1 (add .Pos 4)}}" font-size="10" text-anchor="end" fill="#6b7280">{{.Label}}</text>
   {{end}}{{range .XTicks}}<line x1="{{f1 .Pos}}" x2="{{f1 .Pos}}" y1="{{$c.Y1}}" y2="{{add $c.Y1 4}}" stroke="#9ca3af"/><text x="{{f1 .Pos}}" y="{{add $c.Y1 16}}" font-size="10" text-anchor="middle" fill="#6b7280">{{.Label}}</text>
   {{end}}<line x1="{{.X0}}" x2="{{.X1}}" y1="{{.Y1}}" y2="{{.Y1}}" stroke="#9ca3af"/><line x1="{{.X0}}" x2="{{.X0}}" y1="{{.Y0}}" y2="{{.Y1}}" stroke="#9ca3af"/>
-  {{range .Series}}<polyline fill="none" stroke="{{.Color}}" stroke-width="1.5" stroke-linejoin="round" points="{{.Points}}"/>
+  {{range .RTicks}}<text x="{{add $c.X1 6}}" y="{{f1 (add .Pos 4)}}" font-size="10" text-anchor="start" fill="#7c3aed">{{.Label}}</text>
+  {{end}}{{range .Series}}<polyline fill="none" stroke="{{.Color}}" stroke-width="1.5" stroke-linejoin="round"{{if .Dashed}} stroke-dasharray="5 3"{{end}} points="{{.Points}}"/>
   <rect x="{{f1 .LegendX}}" y="8" width="10" height="10" fill="{{.Color}}"/><text x="{{f1 (add .LegendX 14)}}" y="17" font-size="11" fill="#374151">{{.Name}}</text>
   {{end}}{{end}}
 </svg></div>
 {{end}}
+{{with .Hist}}{{if not .Empty}}<h2>Latency distribution</h2>
+<div class="chart">
+<svg viewBox="0 0 {{.W}} {{.H}}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Latency distribution">
+  <text x="{{.X0}}" y="16" font-size="13" font-weight="600" fill="#111827">Requests per latency bucket (log scale, ms)</text>
+  {{$c := .}}{{range .YTicks}}<line x1="{{$c.X0}}" x2="{{$c.X1}}" y1="{{f1 .Pos}}" y2="{{f1 .Pos}}" stroke="#e5e7eb"/><text x="{{sub $c.X0 6}}" y="{{f1 (add .Pos 4)}}" font-size="10" text-anchor="end" fill="#6b7280">{{.Label}}</text>
+  {{end}}{{range .Bars}}<rect x="{{f1 .X}}" y="{{f1 .Y}}" width="{{f1 .W}}" height="{{f1 .H}}" fill="#2563eb"><title>{{.Title}}</title></rect>
+  {{end}}{{range .XTicks}}<line x1="{{f1 .Pos}}" x2="{{f1 .Pos}}" y1="{{$c.Y1}}" y2="{{add $c.Y1 4}}" stroke="#9ca3af"/><text x="{{f1 .Pos}}" y="{{add $c.Y1 16}}" font-size="10" text-anchor="middle" fill="#6b7280">{{.Label}}</text>
+  {{end}}<line x1="{{.X0}}" x2="{{.X1}}" y1="{{.Y1}}" y2="{{.Y1}}" stroke="#9ca3af"/><line x1="{{.X0}}" x2="{{.X0}}" y1="{{.Y0}}" y2="{{.Y1}}" stroke="#9ca3af"/>
+  {{range .Marks}}<line x1="{{f1 .X}}" x2="{{f1 .X}}" y1="{{$c.Y0}}" y2="{{$c.Y1}}" stroke="{{.Color}}" stroke-width="1.5" stroke-dasharray="4 3"/><text x="{{f1 (add .X 4)}}" y="{{f1 .LabelY}}" font-size="11" fill="{{.Color}}">{{.Name}}</text>
+  {{end}}
+</svg></div>{{end}}{{end}}
 {{if .R.Baseline}}{{with .R.Baseline}}<h2>Baseline comparison</h2>
 <p>Compared with baseline run {{.ReferenceRunID}} (tolerance {{pct .Tolerance}}, error rate ±{{pct (tenth .Tolerance)}} absolute).
 {{if .Regression}}<span class="badge worse regress">Regression</span>{{else}}<span class="badge better">No regression</span>{{end}}</p>

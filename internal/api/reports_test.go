@@ -138,6 +138,16 @@ func TestUpdateRunMetaAPI(t *testing.T) {
 	if got = decode[model.Run](t, rec); got.Label != "rc-2" || got.Notes != "" {
 		t.Fatalf("PATCH notes = %+v", got)
 	}
+	rec = e.json(t, "PATCH", path, map[string]any{"pinned": true})
+	wantStatus(t, rec, 200)
+	if got = decode[model.Run](t, rec); !got.Pinned || got.Label != "rc-2" {
+		t.Fatalf("PATCH pinned = %+v", got)
+	}
+	rec = e.json(t, "PATCH", path, map[string]any{"pinned": false})
+	wantStatus(t, rec, 200)
+	if got = decode[model.Run](t, rec); got.Pinned {
+		t.Fatalf("PATCH unpin = %+v", got)
+	}
 	rec = e.do(t, "GET", path, nil)
 	if got = decode[model.Run](t, rec); got.Label != "rc-2" {
 		t.Fatalf("GET after PATCH = %+v", got)
@@ -189,6 +199,9 @@ func TestRunReportAPI(t *testing.T) {
 	if rep.Window != (model.Window{Kind: model.WindowSteady, From: 5, To: 15}) || rep.Summary.Requests != 50 ||
 		rep.Summary.RPS != 5 || rep.Summary.MaxMs > 101 || rep.Baseline != nil || rep.Run.ID != run.ID {
 		t.Fatalf("steady report = %+v", rep)
+	}
+	if len(rep.Histogram) == 0 {
+		t.Fatalf("no latency histogram in report: %+v", rep)
 	}
 	if len(rep.Thresholds) != 1 || !rep.Thresholds[0].Passed {
 		t.Fatalf("thresholds = %+v", rep.Thresholds)
@@ -250,6 +263,7 @@ func TestReportHTMLAPI(t *testing.T) {
 		`&lt;b&gt;v1&lt;/b&gt;`, `&lt;i&gt;warn&lt;/i&gt;`,
 		"<svg", "<polyline", "Throughput (requests/s)", "Latency (ms)", "@media print",
 		"Baseline comparison", base.ID, "Regression", "Per step", "home", "latency.p95",
+		"Latency distribution", "active VUs",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("report does not contain %q", want)

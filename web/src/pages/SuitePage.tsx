@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { SuiteDialog } from '../components/SuiteDialog';
+import { SuiteTrend } from '../components/SuiteTrend';
 import { ConfirmDialog, ErrorAlert, Icon, Loading, StatusBadge } from '../components/ui';
 import { fmtDateTime, fmtSeconds, runDurationS } from '../lib/format';
 import { useAsync } from '../lib/hooks';
@@ -147,6 +148,8 @@ export function SuitePage() {
           )}
         </div>
       </div>
+
+      <SuiteTrend runs={history} />
 
       <div className="card" style={{ marginTop: 16 }}>
         <div className="card-head">

@@ -50,6 +50,7 @@ type aggregate struct {
 	window     model.Window
 	summary    model.Summary
 	thresholds []model.ThresholdResult
+	histogram  []model.HistBucket // overall latency distribution; nil on fallback
 }
 
 // New returns a Reporter reading from st.
@@ -127,6 +128,7 @@ func (r *Reporter) report(ctx context.Context, run model.Run, w WindowSpec) (mod
 		Window:     agg.window,
 		Summary:    cloneSummary(agg.summary),
 		Thresholds: append([]model.ThresholdResult{}, agg.thresholds...),
+		Histogram:  append([]model.HistBucket(nil), agg.histogram...),
 	}, nil
 }
 
@@ -191,7 +193,7 @@ func (r *Reporter) compute(ctx context.Context, run model.Run, w WindowSpec) (ag
 		return fallback(), nil
 	}
 	sum := metrics.Summarize(merged)
-	a := aggregate{window: win, summary: ToModelSummary(sum)}
+	a := aggregate{window: win, summary: ToModelSummary(sum), histogram: BucketHistogram(merged.Total.Hist, HistogramBuckets)}
 	a.thresholds = append([]model.ThresholdResult{}, run.Thresholds...)
 	if perr == nil {
 		if res, err := metrics.EvaluateThresholds(sum, sc.Thresholds); err == nil {

@@ -45,9 +45,9 @@ type Store interface {
 	// so the runner's status updates never clobber a PATCH made while the
 	// run is active.
 	UpdateRun(ctx context.Context, r model.Run) error
-	// UpdateRunMeta sets the run's label and/or notes (nil = unchanged)
-	// and returns the updated run.
-	UpdateRunMeta(ctx context.Context, id string, label, notes *string) (model.Run, error)
+	// UpdateRunMeta sets the run's label, notes and/or pinned flag (nil =
+	// unchanged) and returns the updated run.
+	UpdateRunMeta(ctx context.Context, id string, label, notes *string, pinned *bool) (model.Run, error)
 	// DeleteRun removes a run with its metrics and error samples; a test
 	// whose baseline it was has its BaselineRunID cleared.
 	DeleteRun(ctx context.Context, id string) error
@@ -105,7 +105,8 @@ type Pruner interface {
 	// PruneRuns deletes finished runs (any status but queued/running)
 	// whose finished_at - or started_at when finished_at is unset - is
 	// before olderThan, together with their metrics, error samples and
-	// error groups. Two kinds of run are always kept:
+	// error groups. Three kinds of run are always kept:
+	//   - a pinned run (Run.Pinned, set by the user);
 	//   - a run that is some test's baseline (tests.baseline_run_id);
 	//   - the latest finished run of each test (newest started_at, then
 	//     highest ID), so "last run" and trends always have a data point.

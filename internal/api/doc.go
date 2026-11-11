@@ -53,7 +53,7 @@
 //	default steady; tolerance default 0.10):
 //	PATCH  /api/runs/{id}                    model.UpdateRunRequest -> model.Run
 //	DELETE /api/runs/{id}                    -> 204 (409 while active)
-//	GET    /api/runs/{id}/report?window=&from=&to=  -> model.RunReport
+//	GET    /api/runs/{id}/report?window=&from=&to=  -> model.RunReport (incl. latency histogram buckets)
 //	GET    /api/runs/{id}/report.html?window=...    self-contained printable HTML report (download)
 //	GET    /api/runs/{id}/export.csv         per-second metric points (CSV)
 //	GET    /api/runs/{id}/export.json        {run, metrics, errors} (JSON download)

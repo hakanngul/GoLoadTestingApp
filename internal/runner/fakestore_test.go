@@ -178,7 +178,7 @@ func (s *fakeStore) ListErrorGroups(_ context.Context, runID string) ([]model.Er
 
 func (s *fakeStore) Close() {}
 
-func (s *fakeStore) UpdateRunMeta(context.Context, string, *string, *string) (model.Run, error) {
+func (s *fakeStore) UpdateRunMeta(context.Context, string, *string, *string, *bool) (model.Run, error) {
 	return model.Run{}, store.ErrNotFound
 }
 func (s *fakeStore) DeleteRun(context.Context, string) error { return store.ErrNotFound }

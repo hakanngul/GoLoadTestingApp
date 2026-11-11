@@ -49,6 +49,8 @@ export interface Run {
   notes: string;
   /** Schedule that started the run (absent = started by hand). */
   schedule_id?: string;
+  /** Protected from retention pruning (absent = not pinned). */
+  pinned?: boolean;
 }
 
 export interface Summary {
@@ -274,6 +276,7 @@ export interface StartRunRequest {
 export interface UpdateRunRequest {
   label?: string;
   notes?: string;
+  pinned?: boolean;
 }
 
 // ---------- Reporting ----------
@@ -298,6 +301,15 @@ export interface RunReport {
   thresholds: ThresholdResult[] | null;
   /** vs the test's baseline run, same window kind. */
   baseline?: Comparison;
+  /** Latency distribution of `window` (all steps), log-spaced buckets; absent without snapshots. */
+  histogram?: HistBucket[];
+}
+
+/** `count` requests took [from_ms, to_ms) milliseconds. */
+export interface HistBucket {
+  from_ms: number;
+  to_ms: number;
+  count: number;
 }
 
 export type Verdict = 'better' | 'same' | 'worse' | 'n/a';

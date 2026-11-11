@@ -9,6 +9,7 @@ import {
   errorStatusTone,
   errorSteps,
   fmtAgo as agoText,
+  fmtRunOffset,
   filterErrorGroups,
   groupKey,
   increasedFails,
@@ -36,7 +37,18 @@ type Tab = 'stats' | 'failures';
  * Locust-style live tables under the charts. `stats` is null until the first
  * `event: stats` arrives (skeleton rows are shown meanwhile).
  */
-export function LiveStatsPanel({ stats, seq, now }: { stats: LiveStats | null; seq: number; now: number }) {
+export function LiveStatsPanel({
+  stats,
+  seq,
+  now,
+  startedAt,
+}: {
+  stats: LiveStats | null;
+  seq: number;
+  now: number;
+  /** Run start (ISO); when set, error times are shown as offsets from it. */
+  startedAt?: string;
+}) {
   const [tab, setTab] = useState<Tab>('stats');
   const [mode, setMode] = useState<StatsMode>('total');
   const groups = stats?.errors ?? [];
@@ -97,10 +109,20 @@ export function LiveStatsPanel({ stats, seq, now }: { stats: LiveStats | null; s
       {tab === 'stats' ? (
         <StatisticsTable stats={stats} mode={mode} seq={seq} />
       ) : (
-        <FailuresTable groups={stats ? groups : null} fmtTime={(iso) => fmtAgoLive(iso, now)} live seq={seq} />
+        <FailuresTable
+          groups={stats ? groups : null}
+          fmtTime={(iso) => (startedAt ? fmtOffsetCell(iso, startedAt) : fmtAgoLive(iso, now))}
+          live
+          seq={seq}
+        />
       )}
     </div>
   );
+}
+
+/** "+42s" from the run start, with the wall-clock time as tooltip. */
+export function fmtOffsetCell(iso: string, startedAt: string): ReactNode {
+  return <span title={fmtDateTime(iso)}>{fmtRunOffset(iso, startedAt)}</span>;
 }
 
 function fmtAgoLive(iso: string, now: number): ReactNode {
@@ -332,17 +354,7 @@ export function FailuresTable({
   );
 }
 
-function FailureTr({
-  g,
-  share,
-  fmtTime,
-  flash,
-}: {
-  g: ErrorGroup;
-  share: number;
-  fmtTime: (iso: string) => ReactNode;
-  flash: string;
-}) {
+function FailureTr({ g, share, fmtTime, flash }: { g: ErrorGroup; share: number; fmtTime: (iso: string) => ReactNode; flash: string }) {
   const [open, setOpen] = useState(false);
   const overflow = isOverflowGroup(g);
   const example = errorExample(g);
@@ -354,15 +366,7 @@ function FailureTr({
     if (!el || open) return;
     setLong(el.scrollHeight > el.clientHeight + 1);
   }, [g.message, open]);
-  const toggle = example
-    ? open
-      ? 'Hide example'
-      : 'Show example'
-    : long && !overflow
-      ? open
-        ? 'Show less'
-        : 'Show full message'
-      : null;
+  const toggle = example ? (open ? 'Hide example' : 'Show example') : long && !overflow ? (open ? 'Show less' : 'Show full message') : null;
   return (
     <tr className={`${overflow ? 'overflow-row' : ''} ${flash}`}>
       <td className="num">

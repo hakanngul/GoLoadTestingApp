@@ -230,7 +230,7 @@ func (f *fakeStore) ListErrorSamples(_ context.Context, runID string) ([]model.E
 
 func (f *fakeStore) Close() {}
 
-func (f *fakeStore) UpdateRunMeta(_ context.Context, id string, label, notes *string) (model.Run, error) {
+func (f *fakeStore) UpdateRunMeta(_ context.Context, id string, label, notes *string, pinned *bool) (model.Run, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r, ok := f.runs[id]
@@ -242,6 +242,9 @@ func (f *fakeStore) UpdateRunMeta(_ context.Context, id string, label, notes *st
 	}
 	if notes != nil {
 		r.Notes = *notes
+	}
+	if pinned != nil {
+		r.Pinned = *pinned
 	}
 	f.runs[id] = r
 	return r, nil

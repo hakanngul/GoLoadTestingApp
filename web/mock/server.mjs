@@ -1306,12 +1306,39 @@ function compareSummaries(refId, ref, candId, cand, tol) {
   };
 }
 
+// Synthetic latency distribution: log-normal fitted to p50/p95, 24 log-spaced buckets up to max.
+function mockHistogram(sum) {
+  if (!sum || !(sum.requests > 0) || !(sum.p50_ms > 0) || !(sum.max_ms > sum.p50_ms)) return undefined;
+  const sigma = Math.max(0.15, Math.log(Math.max(sum.p95_ms, sum.p50_ms * 1.01) / sum.p50_ms) / 1.645);
+  const lo = Math.max(0.05, sum.p50_ms / Math.exp(2.5 * sigma));
+  const hi = sum.max_ms;
+  const n = 24;
+  const edge = (i) => lo * Math.pow(hi / lo, i / n);
+  const cdf = (x) => 0.5 * (1 + erf(Math.log(x / sum.p50_ms) / sigma / Math.SQRT2));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const count = Math.round(sum.requests * (cdf(edge(i + 1)) - cdf(edge(i))));
+    out.push({ from_ms: round(edge(i), 3), to_ms: round(edge(i + 1), 3), count });
+  }
+  while (out.length && out[0].count === 0) out.shift();
+  while (out.length && out[out.length - 1].count === 0) out.pop();
+  return out.length ? out : undefined;
+}
+
+function erf(x) {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return x >= 0 ? y : -y;
+}
+
 function reportFor(run, q, tol = 0.1, withBaseline = true) {
   const w = resolveWindow(run, q);
   if (!w) return null;
   const meta = scenarioMeta(run.yaml);
   const summary = run.summary ? windowSummary(run, w) : summarize([], meta, run.test_id);
   const rep = { run, window: w, summary, thresholds: run.summary ? evalThresholds(meta, summary) : [] };
+  const histogram = mockHistogram(summary);
+  if (histogram) rep.histogram = histogram;
   const t = tests.get(run.test_id);
   const base = t?.baseline_run_id && t.baseline_run_id !== run.id ? runs.get(t.baseline_run_id) : null;
   if (withBaseline && base?.summary && run.summary) {
