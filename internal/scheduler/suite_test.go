@@ -88,7 +88,7 @@ func TestSuiteScheduleFires(t *testing.T) {
 	if fs.count() != 1 || e.run.count() != 0 {
 		t.Fatalf("suite starts = %d, test starts = %d", fs.count(), e.run.count())
 	}
-	if st := fs.starts[0]; st.id != su.ID || st.req.Label != "scheduled: nightly suite" {
+	if st := fs.starts[0]; st.id != su.ID || st.req.StartedBy != "schedule:nightly suite" || st.req.Label != "scheduled: nightly suite" {
 		t.Fatalf("start = %+v", st)
 	}
 	got := e.get(t, sc.ID)

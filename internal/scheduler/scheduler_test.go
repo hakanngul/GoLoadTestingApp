@@ -172,7 +172,7 @@ func TestRecurringFiresOnce(t *testing.T) {
 		t.Fatalf("after fire: %+v", got)
 	}
 	st := e.run.last()
-	if st.req.ScheduleID != sc.ID || st.req.Label != "scheduled: nightly" || st.test.YAML != closedYAML {
+	if st.req.ScheduleID != sc.ID || st.req.StartedBy != "schedule:nightly" || st.req.Label != "scheduled: nightly" || st.test.YAML != closedYAML {
 		t.Fatalf("start = %+v", st.req)
 	}
 	// No double fire, also not after a restart at the same instant.
@@ -456,9 +456,13 @@ func TestRunNow(t *testing.T) {
 	e := newEnv(t)
 	sc := e.create(t, daily3(nil))
 	e.run.setActive("other") // run-now ignores the overlap policy
-	res, err := e.s.RunNow(context.Background(), sc.ID)
+	ctx := model.WithIdentity(context.Background(), model.Identity{Kind: "token", Name: "kiro", Scope: model.ScopeRun})
+	res, err := e.s.RunNow(ctx, sc.ID)
 	if err != nil || res.Run == nil || res.SuiteRun != nil || res.Run.ScheduleID != sc.ID {
 		t.Fatalf("RunNow = %+v, %v", res, err)
+	}
+	if by := e.run.last().req.StartedBy; by != "token:kiro" { // the caller, not the schedule
+		t.Fatalf("run-now started_by = %q", by)
 	}
 	run := *res.Run
 	got := e.get(t, sc.ID)

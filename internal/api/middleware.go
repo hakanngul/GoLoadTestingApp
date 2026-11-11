@@ -3,11 +3,14 @@ package api
 import (
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 )
 
 // statusWriter records the response status and size for logging. It keeps
@@ -113,13 +116,24 @@ func cors(next http.Handler) http.Handler {
 	})
 }
 
-// requireAuth enforces the bearer token on /api/* (except /api/health)
-// when one is configured.
+// requireAuth authenticates /api/* requests (except /api/health) and
+// enforces the scope the matched route needs. The master token
+// (Config.AuthToken) is admin; any other bearer secret is looked up as an
+// API token. With auth disabled every request runs as admin. The caller's
+// model.Identity is put in the request context.
 func (s *server) requireAuth(next http.Handler) http.Handler {
 	if s.authToken == "" {
-		return next
+		anon := model.Identity{Kind: "none", Scope: model.ScopeAdmin}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(model.WithIdentity(r.Context(), anon)))
+		})
 	}
 	want := []byte(s.authToken)
+	master := model.Identity{Kind: "master", Name: "admin", Scope: model.ScopeAdmin}
+	deny := func(w http.ResponseWriter) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="api"`)
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/health" {
 			next.ServeHTTP(w, r)
@@ -132,12 +146,39 @@ func (s *server) requireAuth(next http.Handler) http.Handler {
 			// EventSource cannot send headers.
 			got = r.URL.Query().Get("access_token")
 		}
-		if subtle.ConstantTimeCompare([]byte(got), want) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="api"`)
-			writeError(w, http.StatusUnauthorized, "unauthorized")
+		var id model.Identity
+		switch {
+		case got == "":
+			deny(w)
+			return
+		case subtle.ConstantTimeCompare([]byte(got), want) == 1:
+			id = master
+		case s.tokens != nil && strings.HasPrefix(got, tokenSecretPrefix):
+			tok, ok, err := s.tokens.lookup(r.Context(), got, time.Now())
+			if err != nil {
+				s.log.Error("api token lookup failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "internal server error")
+				return
+			}
+			if !ok {
+				deny(w)
+				return
+			}
+			id = model.Identity{Kind: "token", Name: tok.Name, Scope: tok.Scope}
+		default:
+			deny(w)
 			return
 		}
-		next.ServeHTTP(w, r)
+		// Routes the mux does not know answer 404/405 later; only matched
+		// routes have a scope to enforce.
+		if _, pattern := s.api.Handler(r); pattern != "" {
+			if need := s.scopes[pattern]; !id.Scope.Includes(need) {
+				writeError(w, http.StatusForbidden,
+					fmt.Sprintf("this token has scope %q; %q is needed", id.Scope, need))
+				return
+			}
+		}
+		next.ServeHTTP(w, r.WithContext(model.WithIdentity(r.Context(), id)))
 	})
 }
 

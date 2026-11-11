@@ -54,6 +54,8 @@ func runStoreSuite(t *testing.T, newStore func(t *testing.T) Store) {
 		{"SuiteCRUD", testSuiteCRUD},
 		{"SuiteRuns", testSuiteRuns},
 		{"NotificationChannels", testNotificationChannels},
+		{"APITokens", testAPITokens},
+		{"StartedBy", testStartedBy},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -289,6 +289,7 @@ func (m *Manager) Start(ctx context.Context, test model.Test, req model.StartRun
 		Label:      label,
 		Notes:      req.Notes,
 		ScheduleID: req.ScheduleID,
+		StartedBy:  req.StartedBy,
 	})
 	if err != nil {
 		if plan == nil {

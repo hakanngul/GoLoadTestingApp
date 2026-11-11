@@ -69,6 +69,9 @@ type Run struct {
 	// Pinned protects the run from retention pruning (set by the user via
 	// PATCH /api/runs/{id}). Deleting the run by hand still works.
 	Pinned bool `json:"pinned,omitempty"`
+	// StartedBy records who started the run: "admin" (master token),
+	// "token:<name>", "schedule:<name>" or "" (auth disabled / unknown).
+	StartedBy string `json:"started_by,omitempty"`
 }
 
 // Summary is an aggregate over a time window (whole run or one step).
@@ -307,6 +310,9 @@ type StartRunRequest struct {
 	// ScheduleID is set by the scheduler (never from a request body) and
 	// recorded as Run.ScheduleID.
 	ScheduleID string `json:"-"`
+	// StartedBy is set by the API or scheduler (never from a request body)
+	// and recorded as Run.StartedBy.
+	StartedBy string `json:"-"`
 }
 
 // UpdateRunRequest is the body of PATCH /api/runs/{id}; nil = unchanged.
@@ -679,6 +685,9 @@ type SuiteRequest struct {
 type StartSuiteRequest struct {
 	// Label is given to the suite run and to each test run it starts.
 	Label string `json:"label,omitempty"`
+	// StartedBy is set by the API or scheduler (never from a request body)
+	// and recorded as SuiteRun.StartedBy; its item runs inherit it.
+	StartedBy string `json:"-"`
 }
 
 // SuiteRunItem is the state of one test case within a suite run.
@@ -717,6 +726,8 @@ type SuiteRun struct {
 	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
 	Items         []SuiteRunItem `json:"items"`
 	Error         string         `json:"error,omitempty"`
+	// StartedBy records who started the suite run (see Run.StartedBy).
+	StartedBy string `json:"started_by,omitempty"`
 }
 
 // ---- Notifications ---------------------------------------------------------

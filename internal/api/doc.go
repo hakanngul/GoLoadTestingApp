@@ -1,10 +1,46 @@
 // Package api serves the REST API, the SSE live stream and the embedded UI.
 //
 // CONTRACT (routes). JSON bodies use internal/model types. Errors are
-// model.APIError with an appropriate status (400 validation, 404, 409, 500).
+// model.APIError with an appropriate status (400 validation, 401, 403, 404,
+// 409, 500).
+//
+// AUTH AND SCOPES. With auth disabled (no `serve -token`) every caller is
+// admin. With it, /api/* (except /api/health) needs "Authorization: Bearer
+// <secret>" (the live stream also accepts ?access_token=), where secret is
+// the master token (admin) or a scoped API token ("glt_" + 32 random bytes,
+// base64url; only its SHA-256 is stored; unknown, revoked or expired: 401).
+// A token may only call routes up to its scope, otherwise 403 with
+// `this token has scope "read"; "run" is needed`. Scopes are ordered:
+//
+//	read   GET/HEAD everything, POST /api/validate, POST /api/schedules/preview
+//	run    read + POST /api/tests/try, POST /api/tests/{id}/runs, POST /api/runs/{id}/stop,
+//	       POST /api/suites/{id}/runs, POST /api/suite-runs/{id}/stop, POST /api/schedules/{id}/run-now
+//	write  run + every other mutation (tests, files, PATCH/DELETE runs, baseline, suites,
+//	       schedules, notifications)
+//	admin  write + /api/tokens (GET, POST, DELETE)
+//
+// The scope of every route is derived by routeScope (tokens.go) at
+// registration; TestRouteScopes fails when a new non-GET route is not
+// classified. The caller's model.Identity travels in the request context.
+//
+// AUDIT. model.Run and model.SuiteRun carry started_by: "admin" (master
+// token), "token:<name>", "schedule:<schedule name>" for timed schedule
+// fires (run-now records the caller instead), "" when auth is disabled or
+// for rows from before the feature. Item runs of a suite run inherit the
+// suite run's value. Clients cannot set it: it is not read from request
+// bodies. Notifications mention it.
 //
 //	GET    /api/health                       -> {"status":"ok","version":"...","retention_seconds":N}
 //	                                            (serve -retention; 0 = runs are kept forever)
+//	GET    /api/me                           -> model.Identity {kind: none|master|token, name, scope}
+//	                                            (any authenticated caller; none/admin when auth is disabled)
+//
+//	API tokens (admin only; 409 "API tokens need serve -token (auth is disabled)" without auth):
+//	GET    /api/tokens                       -> []model.APIToken (newest first; never the secret)
+//	POST   /api/tokens                       model.CreateTokenRequest {name 1..60 unique, scope,
+//	                                         expires_in_days 0..365} -> 201 model.CreateTokenResponse
+//	                                         (secret shown once; 400 invalid token, 409 duplicate name)
+//	DELETE /api/tokens/{id}                  -> 204 (revoked immediately)
 //
 //	GET    /api/tests                        -> []model.Test (LastRun filled)
 //	POST   /api/tests                        {name, yaml} -> 201 model.Test   (400 if yaml invalid: APIError.Details = validation errors)

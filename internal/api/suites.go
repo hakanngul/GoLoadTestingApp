@@ -122,6 +122,7 @@ func (s *server) handleStartSuite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	req.StartedBy = model.StartedByFrom(r.Context())
 	run, err := s.suites.Start(r.Context(), r.PathValue("id"), req)
 	if err != nil {
 		s.suiteErr(w, r, err)

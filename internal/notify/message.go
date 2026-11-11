@@ -21,6 +21,9 @@ func (n *Notifier) runText(r model.Run) string {
 	if r.Error != "" {
 		parts = append(parts, "error: "+slackEscape(truncate(r.Error, maxErrLen)))
 	}
+	if r.StartedBy != "" {
+		parts = append(parts, "started by "+slackEscape(r.StartedBy))
+	}
 	if n.base != "" {
 		parts = append(parts, n.base+"/runs/"+r.ID)
 	}
@@ -34,6 +37,9 @@ func (n *Notifier) suiteText(s model.SuiteRun) string {
 		len(s.Items), plural(len(s.Items), "test", "tests"))
 	if s.Error != "" {
 		head += " · error: " + slackEscape(truncate(s.Error, maxErrLen))
+	}
+	if s.StartedBy != "" {
+		head += " · started by " + slackEscape(s.StartedBy)
 	}
 	if n.base != "" {
 		head += " · " + n.base + "/suite-runs/" + s.ID

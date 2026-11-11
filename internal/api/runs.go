@@ -27,6 +27,7 @@ func (s *server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	req.StartedBy = model.StartedByFrom(r.Context())
 	t, err := s.store.GetTest(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.writeErr(w, r, err)

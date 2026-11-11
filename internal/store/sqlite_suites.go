@@ -28,18 +28,18 @@ const (
 	sqliteDeleteSuiteSQL = `DELETE FROM suites WHERE id = ?`
 
 	sqliteSuiteRunCols = `id, suite_id, suite_name, status, mode, stop_on_failure, gap_ms, label,
-	started_at, finished_at, items, error`
+	started_at, finished_at, items, error, started_by`
 
 	sqliteGetSuiteRunSQL = `SELECT id, suite_id, suite_name, status, mode, stop_on_failure, gap_ms, label,
-	started_at, finished_at, items, error FROM suite_runs WHERE id = ?`
+	started_at, finished_at, items, error, started_by FROM suite_runs WHERE id = ?`
 
 	sqliteListSuiteRunsSQL = `SELECT id, suite_id, suite_name, status, mode, stop_on_failure, gap_ms, label,
-	started_at, finished_at, items, error FROM suite_runs
+	started_at, finished_at, items, error, started_by FROM suite_runs
 	WHERE (? = '' OR suite_id = ?) AND (? = 0 OR status IN ('queued', 'running'))
 	ORDER BY started_at DESC, id DESC LIMIT ?`
 
 	sqliteCreateSuiteRunSQL = `INSERT INTO suite_runs (id, suite_id, suite_name, status, mode, stop_on_failure,
-	gap_ms, label, started_at, finished_at, items, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	gap_ms, label, started_at, finished_at, items, error, started_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	sqliteUpdateSuiteRunSQL = `UPDATE suite_runs SET status = ?, finished_at = ?, items = ?, error = ? WHERE id = ?`
 )
@@ -73,7 +73,7 @@ func scanSQLiteSuiteRun(sc interface{ Scan(...any) error }) (model.SuiteRun, err
 		finished            sql.NullInt64
 	)
 	if err := sc.Scan(&r.ID, &r.SuiteID, &r.SuiteName, &status, &mode, &stop, &r.GapMs, &r.Label,
-		&started, &finished, &items, &r.Error); err != nil {
+		&started, &finished, &items, &r.Error, &r.StartedBy); err != nil {
 		return model.SuiteRun{}, sqliteErr(err)
 	}
 	var err error
@@ -183,7 +183,7 @@ func (s *SQLite) CreateSuiteRun(ctx context.Context, r model.SuiteRun) (model.Su
 	err = sqliteTx(ctx, s.w, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, sqliteCreateSuiteRunSQL, id, r.SuiteID, r.SuiteName, string(r.Status),
 			string(r.Mode), boolInt(r.StopOnFailure), r.GapMs, r.Label, toMicros(r.StartedAt),
-			optMicros(r.FinishedAt), items, r.Error); err != nil {
+			optMicros(r.FinishedAt), items, r.Error, r.StartedBy); err != nil {
 			return sqliteErr(err)
 		}
 		out, err = scanSQLiteSuiteRun(tx.QueryRowContext(ctx, sqliteGetSuiteRunSQL, id))

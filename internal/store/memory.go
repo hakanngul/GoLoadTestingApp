@@ -29,6 +29,7 @@ type Memory struct {
 	suites  map[string]*model.Suite               // suite ID -> suite (item names empty)
 	sruns   map[string]*model.SuiteRun            // suite run ID -> suite run
 	notifs  map[string]*model.NotificationChannel // channel ID -> channel
+	tokens  map[string]*memToken                  // API token ID -> token
 }
 
 type memTest struct {
@@ -56,6 +57,7 @@ func NewMemory() *Memory {
 		suites:  make(map[string]*model.Suite),
 		sruns:   make(map[string]*model.SuiteRun),
 		notifs:  make(map[string]*model.NotificationChannel),
+		tokens:  make(map[string]*memToken),
 	}
 }
 
@@ -293,6 +295,7 @@ func (m *Memory) UpdateRun(ctx context.Context, r model.Run) error {
 	next := normRun(cloneRun(r))
 	next.ID, next.TestID = cur.ID, cur.TestID
 	next.Label, next.Notes, next.ScheduleID, next.Pinned = cur.Label, cur.Notes, cur.ScheduleID, cur.Pinned
+	next.StartedBy = cur.StartedBy
 	if next.StartedAt.IsZero() {
 		next.StartedAt = cur.StartedAt
 	}

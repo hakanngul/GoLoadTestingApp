@@ -37,6 +37,8 @@ Before any test against a shared or production system:
 
 `-token` / `GOLOAD_TOKEN` sets a bearer token. When it is set, every `/api/*` route except `/api/health` requires it. The token is compared in constant time. The live stream also accepts `?access_token=` because browsers cannot set headers on EventSource. The UI asks for the token on its sign-in screen and keeps it in localStorage.
 
+That token is the master (admin) token. For CI and agents, mint scoped API tokens (`read`, `run`, `write`, `admin`) with `POST /api/tokens` instead; they are stored only as SHA-256 hashes, can expire, are revoked immediately with `DELETE /api/tokens/{id}`, and every run records who started it (`started_by`). See the README section "API tokens and audit".
+
 This is single-user auth, by design: there are no roles and no multi-tenancy, which are out of scope for v1. Port 8080 is plain HTTP. Put TLS in front of it (a reverse proxy, an ALB, or SSM port forwarding as described in docs/aws.md) whenever the network between you and the master is not trusted.
 
 ## Worker authentication
