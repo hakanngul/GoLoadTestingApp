@@ -134,6 +134,7 @@ func TestAuthValidationOK(t *testing.T) {
 	for _, a := range []string{
 		`{type: login, value: "Token {{jwt}}", login: {path: /l, extract: [{var: jwt, from: json, expr: a}]}}`,
 		`{type: login, inject: false, login: {path: /l, extract: [{var: jwt, from: json, expr: a}]}}`,
+		`{type: login, inject: false, login: {path: /l}}`, // session cookie only
 		`{type: login, scope: shared, refresh: 10m, login: {method: put, path: /l, extract: [{var: token, from: header, expr: X-Token}]}}`,
 		`{type: bearer, token: "{{api_key}}"}`,
 		`{type: basic, username: "{{user}}", password: "{{pass}}", header: Proxy-Authorization}`,
@@ -141,6 +142,15 @@ func TestAuthValidationOK(t *testing.T) {
 		if _, err := Parse([]byte(authBase + "auth: " + a + "\n")); err != nil {
 			t.Errorf("%s: %v", a, err)
 		}
+	}
+}
+
+// A cookie-only login (no extract) needs cookies; without them it has no effect.
+func TestAuthCookieLoginNeedsCookies(t *testing.T) {
+	src := strings.Replace(authBase, "  base_url: https://api.example.test\n", "  base_url: https://api.example.test\n  cookies: false\n", 1)
+	_, err := Parse([]byte(src + "auth: {type: login, inject: false, login: {path: /l}}\n"))
+	if err == nil || !strings.Contains(fieldPaths(err), "|auth.login.extract|") {
+		t.Fatalf("want auth.login.extract error, got %v", err)
 	}
 }
 

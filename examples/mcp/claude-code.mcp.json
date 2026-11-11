@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "goload": {
+      "command": "goloadtest",
+      "args": ["mcp", "--server", "https://goload.internal.example"],
+      "env": { "GOLOAD_TOKEN": "${GOLOAD_TOKEN}" }
+    }
+  }
+}

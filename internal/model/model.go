@@ -300,6 +300,10 @@ type StartRunRequest struct {
 	Workers int    `json:"workers"` // 0 => 1 (local)
 	Label   string `json:"label,omitempty"`
 	Notes   string `json:"notes,omitempty"`
+	// Load overrides the test's load for this run only (nil = the test's
+	// own load). Applied to a copy of the scenario; the test is not
+	// changed (same semantics as a schedule's or suite item's override).
+	Load *LoadOverride `json:"load,omitempty"`
 	// ScheduleID is set by the scheduler (never from a request body) and
 	// recorded as Run.ScheduleID.
 	ScheduleID string `json:"-"`

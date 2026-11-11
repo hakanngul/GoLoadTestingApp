@@ -36,6 +36,8 @@
 //	                                         404 for an unknown test_id.
 //
 //	POST   /api/tests/{id}/runs              model.StartRunRequest -> 201 model.Run
+//	                                         (optional "load": a model.LoadOverride applied to a copy of the
+//	                                         scenario for this run only; 400 "invalid load override")
 //	GET    /api/runs?test_id=&limit=         -> []model.Run (newest first)
 //	GET    /api/runs/{id}                    -> model.Run
 //	POST   /api/runs/{id}/stop               -> 202

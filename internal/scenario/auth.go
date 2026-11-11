@@ -152,7 +152,14 @@ func (s *Scenario) validateAuth() []error {
 		}
 		errs = append(errs, validateStep("auth.login", l)...)
 		if len(l.Extract) == 0 {
-			add("auth.login.extract", "at least one extract is required (e.g. {var: token, from: json, expr: access_token})")
+			// A login that only sets a session cookie needs no extract: its
+			// cookies are cached and replayed like extracted variables.
+			switch {
+			case a.InjectEnabled():
+				add("auth.login.extract", "at least one extract is required (e.g. {var: token, from: json, expr: access_token}); for a login that only sets a session cookie use inject: false")
+			case !s.Target.CookiesEnabled():
+				add("auth.login.extract", "at least one extract is required when target.cookies is false (without cookies or extracts the login has no effect)")
+			}
 		} else if a.Value == DefaultAuthValue && a.InjectEnabled() {
 			found := false
 			for _, ex := range l.Extract {
