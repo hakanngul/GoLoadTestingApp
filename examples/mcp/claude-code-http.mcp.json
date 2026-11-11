@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "goload": {
+      "type": "http",
+      "url": "https://goload.internal.example/mcp",
+      "headers": { "Authorization": "Bearer ${GOLOAD_TOKEN}" }
+    }
+  }
+}

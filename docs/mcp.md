@@ -99,6 +99,56 @@ Or a project `.mcp.json` (Claude Code expands `${VAR}`):
 
 If your client does not expand variables, put the token in a user-level config file that is not in any repository, or start the client from a shell where `GOLOAD_TOKEN` is set (the MCP process inherits the environment).
 
+## Remote (HTTP) endpoint
+
+Besides the local stdio process, the GoLoad server can serve MCP itself, so remote agents connect by URL and nothing needs to be installed on the agent's machine.
+
+Enable it on the server:
+
+```bash
+goloadtest serve -token "$GOLOAD_TOKEN" -mcp            # or GOLOAD_MCP=1
+goloadtest serve -token "$GOLOAD_TOKEN" -mcp -mcp-read-only -mcp-max-users 20 -mcp-max-duration 5m
+```
+
+The endpoint is `/mcp` (MCP Streamable HTTP). Flags: `-mcp`, `-mcp-read-only`, `-mcp-max-users` (default 50), `-mcp-max-duration` (default 10m). The tools, caps and read-only behavior are the same as for `goloadtest mcp`.
+
+How it works:
+
+- **Stateless, JSON responses.** No session is kept between requests and replies are plain `application/json` (no SSE stream), so any instance behind a load balancer can answer any request. Tools are stateless; `wait_run` blocks inside one request until the run finishes, so make sure your proxy or ALB idle timeout is generous (60s or more; the agent can call `wait_run` again).
+- **Per-caller auth.** When the server has `-token` set, every request must carry `Authorization: Bearer <token>`. The token is checked up front (`GET /api/me`, falling back to `GET /api/tests` on servers without `/api/me`); a missing or wrong token gets `401`. Each tool call then goes to the API handler in-process (no network loopback) with the caller's own token, so the API's auth and token scopes apply to every call. Without `-token` the endpoint is open and the server logs a warning at startup.
+
+Client configuration (use a variable for the token, not a literal). Claude Code:
+
+```bash
+claude mcp add --transport http goload https://goload.internal.example/mcp \
+  --header "Authorization: Bearer $GOLOAD_TOKEN"
+```
+
+Or in `.mcp.json` ([`examples/mcp/claude-code-http.mcp.json`](../examples/mcp/claude-code-http.mcp.json)):
+
+```json
+{
+  "mcpServers": {
+    "goload": {
+      "type": "http",
+      "url": "https://goload.internal.example/mcp",
+      "headers": { "Authorization": "Bearer ${GOLOAD_TOKEN}" }
+    }
+  }
+}
+```
+
+Kiro and Cursor take a remote server entry with `url` and `headers` ([`kiro-http.mcp.json`](../examples/mcp/kiro-http.mcp.json), [`cursor-http.mcp.json`](../examples/mcp/cursor-http.mcp.json)). Check your client's docs: header support and variable syntax vary by version.
+
+Recommended: give each person or agent their own token with scope `run`, created by an admin with `POST /api/tokens` or in the UI under API tokens. Access can then be revoked individually, and the agent cannot administer the server. Do not hand out the master token.
+
+Security notes:
+
+- Put `/mcp` behind the VPN or an internal load balancer and terminate TLS in front of it; bearer tokens travel in a header.
+- The caps (`-mcp-max-users`, `-mcp-max-duration`) apply to everything started through `/mcp`; `-mcp-read-only` makes the endpoint look-only.
+- Without `-token` every tool is open to anyone who can reach the port. Do that only for a throwaway setup.
+- Tool output goes to your AI client's model provider, as with the stdio server.
+
 ## Security
 
 - Keep the token in the environment or a user-level config, never in a repository. Use a token with only the access you need.

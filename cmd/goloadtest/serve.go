@@ -23,6 +23,8 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/allowlist"
 	"github.com/hakanngul/GoLoadTestingApp/internal/api"
 	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
+	"github.com/hakanngul/GoLoadTestingApp/internal/mcpguide"
+	"github.com/hakanngul/GoLoadTestingApp/internal/mcpserver"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/notify"
 	"github.com/hakanngul/GoLoadTestingApp/internal/provision"
@@ -51,7 +53,15 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		`delete finished runs older than this, checked at start and hourly: e.g. 90d, 720h (min 1h; 0 or empty = keep forever). A test's baseline and latest run are always kept`)
 	publicURL := flags.String("public-url", os.Getenv("GOLOAD_PUBLIC_URL"),
 		`externally reachable base URL of this server (e.g. https://goload.example.com), used for links in notifications; empty = no links`)
+	mcpOn := flags.Bool("mcp", envBool("GOLOAD_MCP"), "serve an MCP (Streamable HTTP) endpoint at /mcp for remote AI agents; uses the caller's bearer token against the API (env GOLOAD_MCP)")
+	mcpReadOnly := flags.Bool("mcp-read-only", false, "with -mcp: hide every MCP tool that changes anything")
+	mcpMaxUsers := flags.Int("mcp-max-users", mcpserver.DefaultMaxUsers, "with -mcp: refuse runs with more virtual users")
+	mcpMaxDuration := flags.Duration("mcp-max-duration", mcpserver.DefaultMaxDuration, "with -mcp: refuse runs that last longer")
 	if err := flags.Parse(args); err != nil {
+		return exitUsage
+	}
+	if *mcpOn && (*mcpMaxUsers < 1 || *mcpMaxDuration <= 0) {
+		fmt.Fprintln(stderr, "serve: -mcp-max-users must be at least 1 and -mcp-max-duration positive")
 		return exitUsage
 	}
 	retention, err := parseRetention(*retentionFlag)
@@ -189,15 +199,36 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "ui: %v\n", err)
 		return exitRun
 	}
+	apiHandler := api.NewServer(api.Config{
+		Store: st, Runner: mgr, UI: ui, Version: version,
+		Logger: log, AuthToken: *token, DevCORS: *devCORS, Retention: retention,
+		Scheduler: schedulerOrNil(sched),
+		Suites:    suitesOrNil(suites),
+		Notifier:  notifierOrNil(notifier),
+	})
+	var handler http.Handler = apiHandler
+	if *mcpOn {
+		if *token == "" {
+			log.Warn("MCP endpoint is open without auth: set -token (GOLOAD_TOKEN) so /mcp requires a bearer token")
+		}
+		mcpHandler := mcpserver.HTTPHandler(apiHandler, mcpserver.HTTPOptions{
+			Version: version, ReadOnly: *mcpReadOnly, MaxUsers: *mcpMaxUsers, MaxDuration: *mcpMaxDuration,
+			Guide: mcpguide.Guide(), CreateTestPrompt: mcpguide.CreateTestPrompt,
+			AuthRequired: *token != "", Logger: log,
+		})
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == mcpserver.HTTPPath {
+				mcpHandler.ServeHTTP(w, r)
+				return
+			}
+			apiHandler.ServeHTTP(w, r)
+		})
+		log.Info("MCP endpoint enabled", "path", mcpserver.HTTPPath, "read_only", *mcpReadOnly,
+			"max_users", *mcpMaxUsers, "max_duration", mcpMaxDuration.String())
+	}
 	srv := &http.Server{
-		Addr: *addr,
-		Handler: api.NewServer(api.Config{
-			Store: st, Runner: mgr, UI: ui, Version: version,
-			Logger: log, AuthToken: *token, DevCORS: *devCORS, Retention: retention,
-			Scheduler: schedulerOrNil(sched),
-			Suites:    suitesOrNil(suites),
-			Notifier:  notifierOrNil(notifier),
-		}),
+		Addr:              *addr,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -358,6 +389,15 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBool reports whether the variable is set to 1/true/yes/on.
+func envBool(key string) bool {
+	switch strings.ToLower(os.Getenv(key)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // provisionerFromEnv builds the worker provisioner configured through
