@@ -1,0 +1,63 @@
+# Gate a pipeline on a load-test suite that runs on your GoLoad server.
+#
+# Setup:
+#   - repository secret GOLOAD_TOKEN  = the server's API token (serve -token)
+#   - repository variable GOLOAD_URL  = e.g. https://goload.example.com
+#   - the suite "post-deploy" exists on the server (Suites -> New suite)
+#
+# Action versions: checkout and setup-go are pinned to commit SHAs (the same
+# ones this repo's own CI uses). The two other actions use their major
+# version tags (@v4 / @v1); replace them with SHAs if your policy requires it.
+name: load-test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  checks: write        # dorny/test-reporter creates a check run
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: stable
+      - name: Install goloadtest
+        run: go install github.com/hakanngul/GoLoadTestingApp/cmd/goloadtest@latest
+
+      - name: Run suite on the GoLoad server
+        env:
+          GOLOAD_TOKEN: ${{ secrets.GOLOAD_TOKEN }}
+          GOLOAD_URL: ${{ vars.GOLOAD_URL }}
+        # Exit 0 = passed, 1 = a threshold failed, 3 = error/timeout/unreachable.
+        # If the job is cancelled, the remote run is stopped too.
+        run: |
+          mkdir -p results
+          "$(go env GOPATH)/bin/goloadtest" remote run \
+            --server "$GOLOAD_URL" \
+            --suite post-deploy \
+            --label "$GITHUB_SHA" \
+            --timeout 30m \
+            --junit results/junit.xml \
+            --json results/suite-run.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-results
+          path: results/
+
+      - name: Publish test report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Load test
+          path: results/junit.xml
+          reporter: java-junit

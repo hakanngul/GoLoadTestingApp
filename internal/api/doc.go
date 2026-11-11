@@ -63,8 +63,11 @@
 //	GET    /api/reports/overview?days=30     -> model.Overview
 //
 //	Schedules (internal/scheduler; 503 when the server has no scheduler):
-//	GET    /api/schedules?test_id=           -> []model.Schedule (oldest first; test_name filled)
+//	GET    /api/schedules?test_id=           -> []model.Schedule (oldest first; test_name / suite_name filled)
 //	POST   /api/schedules                    model.ScheduleRequest -> 201 model.Schedule
+//	                                         (a schedule targets exactly one of test_id and suite_id; a
+//	                                         suite schedule starts a suite run per occurrence and must not
+//	                                         set load or workers; last_run_id is then a suite run ID)
 //	                                         (400 "invalid schedule", Details = "field: message"; enabled
 //	                                         defaults to true; next_run_at computed from the definition)
 //	GET    /api/schedules/{id}               -> model.Schedule
@@ -72,7 +75,9 @@
 //	                                         from now; last_* kept)
 //	DELETE /api/schedules/{id}               -> 204 (runs it started keep schedule_id)
 //	POST   /api/schedules/{id}/run-now       -> 201 model.Run (starts now with the schedule's overrides,
-//	                                         ignoring timing, enabled and overlap; next_run_at unchanged)
+//	                                         ignoring timing, enabled and overlap; next_run_at unchanged);
+//	                                         for a suite schedule 201 {"suite_run": model.SuiteRun}
+//	                                         (409 when the suite is already running)
 //	POST   /api/schedules/preview            model.SchedulePreviewRequest {kind, at|cron, timezone, count}
 //	                                         -> model.SchedulePreview (always 200; next count fire times,
 //	                                         default 5, max 50, or errors)
@@ -90,6 +95,21 @@
 //	GET    /api/suite-runs?suite_id=&limit=  -> []model.SuiteRun (newest first)
 //	GET    /api/suite-runs/{id}              -> model.SuiteRun (poll while running)
 //	POST   /api/suite-runs/{id}/stop         -> 202 (409 not active)
+//
+//	Notifications (channels live in the store's store.NotificationStore; 503 when the store does not
+//	implement it). A channel URL is a secret: responses carry only "url_masked"
+//	(scheme://host/…last4) and never "url"; URLs are never logged:
+//	GET    /api/notifications                -> []model.NotificationView (oldest first)
+//	POST   /api/notifications                model.NotificationRequest -> 201 model.NotificationView
+//	                                         (400 "invalid notification channel", Details = "field: message":
+//	                                         name required <=100, kind slack|webhook, url required and https
+//	                                         (http only for localhost/127.0.0.1/::1), events non-empty subset of
+//	                                         run_finished|suite_finished; enabled defaults to true)
+//	PUT    /api/notifications/{id}           model.NotificationRequest -> model.NotificationView (empty url
+//	                                         keeps the stored one; enabled omitted keeps the stored value)
+//	DELETE /api/notifications/{id}           -> 204
+//	POST   /api/notifications/{id}/test      -> 200 {"ok": true} or {"ok": false, "error": "..."} after a
+//	                                         synchronous test message (503 without a Notifier)
 //
 //	GET    /*                              embedded UI (web/dist), SPA fallback to index.html
 //

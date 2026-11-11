@@ -108,6 +108,22 @@ export interface FormThreshold {
   value: string;
 }
 
+/** Regression rule vs the baseline run (YAML `regression`); exactly one limit key per rule. */
+export type RegressionKind = 'max_increase_pct' | 'max_increase' | 'max_decrease_pct' | 'max_decrease';
+export const REGRESSION_KINDS: { value: RegressionKind; label: string }[] = [
+  { value: 'max_increase_pct', label: 'max increase %' },
+  { value: 'max_increase', label: 'max increase (absolute)' },
+  { value: 'max_decrease_pct', label: 'max decrease %' },
+  { value: 'max_decrease', label: 'max decrease (absolute)' },
+];
+export const REGRESSION_METRICS = ['p50_ms', 'p90_ms', 'p95_ms', 'p99_ms', 'mean_ms', 'max_ms', 'error_rate', 'rps'];
+
+export interface FormRegression {
+  metric: string;
+  kind: RegressionKind;
+  value: string;
+}
+
 export type AuthType = 'none' | 'login' | 'bearer' | 'basic';
 export type AuthScope = 'per_user' | 'shared';
 export const AUTH_TYPES: AuthType[] = ['none', 'login', 'bearer', 'basic'];
@@ -204,6 +220,7 @@ export interface ScenarioForm {
   auth: FormAuth;
   steps: FormStep[];
   thresholds: FormThreshold[];
+  regression: FormRegression[];
 }
 
 export function emptyStep(i = 1): FormStep {
@@ -241,6 +258,7 @@ export function defaultForm(): ScenarioForm {
       { metric: 'latency.p95', op: 'lt', value: '500' },
       { metric: 'error_rate', op: 'lt', value: '0.01' },
     ],
+    regression: [],
   };
 }
 
@@ -338,6 +356,11 @@ export function yamlToForm(text: string): ParseOutcome {
     thresholds: arr(doc.thresholds).map((t) => {
       const o = isObj(t) ? t : {};
       return { metric: str(o.metric), op: str(o.op) || 'lt', value: str(o.value) };
+    }),
+    regression: arr(doc.regression).map((r) => {
+      const o = isObj(r) ? r : {};
+      const kind = REGRESSION_KINDS.find((k) => o[k.value] !== undefined)?.value ?? 'max_increase_pct';
+      return { metric: str(o.metric), kind, value: str(o[kind]) };
     }),
   };
   return { form, error: null };
@@ -447,6 +470,9 @@ export function formToObject(f: ScenarioForm): Obj {
 
   if (f.thresholds.length) {
     out.thresholds = f.thresholds.map((t) => ({ metric: t.metric, op: t.op, value: num(t.value) }));
+  }
+  if (f.regression.length) {
+    out.regression = f.regression.map((r) => ({ metric: r.metric, [r.kind]: num(r.value) }));
   }
   return out;
 }

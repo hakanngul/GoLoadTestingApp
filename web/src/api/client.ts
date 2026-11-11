@@ -6,6 +6,9 @@ import type {
   Health,
   LiveStats,
   MetricPoint,
+  NotificationChannel,
+  NotificationRequest,
+  NotificationTestResult,
   Overview,
   Run,
   RunReport,
@@ -13,6 +16,7 @@ import type {
   SchedulePreview,
   SchedulePreviewRequest,
   ScheduleRequest,
+  ScheduleSuiteRunResponse,
   StartRunRequest,
   StartSuiteRequest,
   Suite,
@@ -215,7 +219,8 @@ export const api = {
   createSchedule: (req: ScheduleRequest) => request<Schedule>('POST', '/api/schedules', req),
   updateSchedule: (id: string, req: ScheduleRequest) => request<Schedule>('PUT', `/api/schedules/${enc(id)}`, req),
   deleteSchedule: (id: string) => request<void>('DELETE', `/api/schedules/${enc(id)}`),
-  runScheduleNow: (id: string) => request<Run>('POST', `/api/schedules/${enc(id)}/run-now`),
+  /** A Run for a test schedule, `{suite_run}` for a suite schedule. */
+  runScheduleNow: (id: string) => request<Run | ScheduleSuiteRunResponse>('POST', `/api/schedules/${enc(id)}/run-now`),
   previewSchedule: (req: SchedulePreviewRequest) => request<SchedulePreview>('POST', '/api/schedules/preview', req),
 
   // ---------- test suites ----------
@@ -229,6 +234,13 @@ export const api = {
     request<SuiteRun[] | null>('GET', `/api/suites/${enc(suiteId)}/runs?limit=${limit}`).then((r) => r ?? []),
   getSuiteRun: (id: string) => request<SuiteRun>('GET', `/api/suite-runs/${enc(id)}`),
   stopSuiteRun: (id: string) => request<void>('POST', `/api/suite-runs/${enc(id)}/stop`),
+
+  // ---------- notifications ----------
+  listNotifications: () => request<NotificationChannel[] | null>('GET', '/api/notifications').then((r) => r ?? []),
+  createNotification: (req: NotificationRequest) => request<NotificationChannel>('POST', '/api/notifications', req),
+  updateNotification: (id: string, req: NotificationRequest) => request<NotificationChannel>('PUT', `/api/notifications/${enc(id)}`, req),
+  deleteNotification: (id: string) => request<void>('DELETE', `/api/notifications/${enc(id)}`),
+  testNotification: (id: string) => request<NotificationTestResult>('POST', `/api/notifications/${enc(id)}/test`),
 };
 
 // ---------- downloads ----------

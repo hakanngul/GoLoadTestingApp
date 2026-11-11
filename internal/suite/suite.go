@@ -98,6 +98,10 @@ type Options struct {
 	Logger *slog.Logger
 	// Poll is how often an active item's run is re-read. 0 = DefaultPoll.
 	Poll time.Duration
+	// OnFinish, if set, is called once per suite run after its final
+	// status has been persisted, with the stored run. It runs on the suite
+	// run's goroutine and must not block.
+	OnFinish func(model.SuiteRun)
 }
 
 // Service manages suites and runs them. It is safe for concurrent use.
@@ -107,6 +111,7 @@ type Service struct {
 	now    func() time.Time
 	log    *slog.Logger
 	poll   time.Duration
+	onFin  func(model.SuiteRun)
 
 	mu     sync.Mutex
 	active map[string]*activeRun // suite run ID -> run
@@ -127,7 +132,7 @@ type activeRun struct {
 
 // New returns a Service.
 func New(o Options) *Service {
-	s := &Service{st: o.Store, runner: o.Runner, now: o.Now, log: o.Logger, poll: o.Poll,
+	s := &Service{st: o.Store, runner: o.Runner, now: o.Now, log: o.Logger, poll: o.Poll, onFin: o.OnFinish,
 		active: make(map[string]*activeRun), done: make(chan struct{})}
 	if s.now == nil {
 		s.now = time.Now
@@ -343,6 +348,8 @@ func (s *Service) Recover(ctx context.Context) (int, error) {
 
 // Start starts a run of the suite in the background and returns it
 // (status running).
+var _ scheduler.SuiteStarter = (*Service)(nil)
+
 func (s *Service) Start(ctx context.Context, id string, req model.StartSuiteRequest) (model.SuiteRun, error) {
 	label := strings.TrimSpace(req.Label)
 	if utf8.RuneCountInString(label) > MaxLabelLen {
@@ -705,4 +712,11 @@ func (s *Service) finish(a *activeRun) {
 			r.Status = model.RunFailed
 		}
 	})
+	if s.onFin != nil {
+		a.mu.Lock()
+		final := a.run
+		final.Items = append([]model.SuiteRunItem(nil), a.run.Items...)
+		a.mu.Unlock()
+		s.onFin(final)
+	}
 }

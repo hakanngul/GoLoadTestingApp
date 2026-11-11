@@ -7,6 +7,7 @@ import (
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scheduler"
+	"github.com/hakanngul/GoLoadTestingApp/internal/suite"
 )
 
 // Scheduler manages schedules (implemented by *scheduler.Scheduler).
@@ -16,7 +17,7 @@ type Scheduler interface {
 	Create(ctx context.Context, req model.ScheduleRequest) (model.Schedule, error)
 	Update(ctx context.Context, id string, req model.ScheduleRequest) (model.Schedule, error)
 	Delete(ctx context.Context, id string) error
-	RunNow(ctx context.Context, id string) (model.Run, error)
+	RunNow(ctx context.Context, id string) (scheduler.RunResult, error)
 	Preview(req model.SchedulePreviewRequest) model.SchedulePreview
 }
 
@@ -29,11 +30,15 @@ var errNoScheduler = &httpError{status: http.StatusServiceUnavailable, msg: "sch
 // everything else goes through writeErr.
 func (s *server) scheduleErr(w http.ResponseWriter, r *http.Request, err error) {
 	var ve *scheduler.ValidationError
-	if errors.As(err, &ve) {
+	var sve *suite.ValidationError
+	switch {
+	case errors.As(err, &ve):
 		writeError(w, http.StatusBadRequest, "invalid schedule", ve.Details...)
-		return
+	case errors.As(err, &sve), errors.Is(err, suite.ErrActive), errors.Is(err, suite.ErrShuttingDown):
+		s.suiteErr(w, r, err)
+	default:
+		s.writeErr(w, r, err)
 	}
-	s.writeErr(w, r, err)
 }
 
 func (s *server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
@@ -115,12 +120,16 @@ func (s *server) handleRunScheduleNow(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, errNoScheduler)
 		return
 	}
-	run, err := s.scheduler.RunNow(r.Context(), r.PathValue("id"))
+	res, err := s.scheduler.RunNow(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.scheduleErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, normalizeRun(run))
+	if res.SuiteRun != nil {
+		writeJSON(w, http.StatusCreated, map[string]any{"suite_run": res.SuiteRun})
+		return
+	}
+	writeJSON(w, http.StatusCreated, normalizeRun(*res.Run))
 }
 
 func (s *server) handlePreviewSchedule(w http.ResponseWriter, r *http.Request) {

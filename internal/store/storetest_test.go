@@ -48,9 +48,11 @@ func runStoreSuite(t *testing.T, newStore func(t *testing.T) Store) {
 		{"ScheduleCRUD", testScheduleCRUD},
 		{"ScheduleAdvance", testScheduleAdvance},
 		{"ScheduleCascade", testScheduleCascade},
+		{"ScheduleSuite", testScheduleSuite},
 		{"RunScheduleID", testRunScheduleID},
 		{"SuiteCRUD", testSuiteCRUD},
 		{"SuiteRuns", testSuiteRuns},
+		{"NotificationChannels", testNotificationChannels},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

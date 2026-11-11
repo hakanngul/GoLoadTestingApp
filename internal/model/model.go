@@ -91,6 +91,10 @@ type ThresholdResult struct {
 	Value  float64 `json:"value"`
 	Actual float64 `json:"actual"`
 	Passed bool    `json:"passed"`
+	// Baseline is the baseline run's value of the metric. Set only on
+	// regression results (Metric "<name> vs baseline"); Value is then the
+	// allowed limit derived from it.
+	Baseline *float64 `json:"baseline,omitempty"`
 }
 
 // MetricPoint is one second of a run (live stream and stored time series).
@@ -513,9 +517,14 @@ type LoadOverride struct {
 
 // ScheduleSpec is the user-editable part of a schedule.
 type ScheduleSpec struct {
-	TestID string       `json:"test_id"`
-	Name   string       `json:"name"`
-	Kind   ScheduleKind `json:"kind"`
+	// TestID is the test a run is started for. Exactly one of TestID and
+	// SuiteID is set.
+	TestID string `json:"test_id,omitempty"`
+	// SuiteID is the test suite a suite run is started for. A suite
+	// schedule has no Load and no Workers: the suite items carry their own.
+	SuiteID string       `json:"suite_id,omitempty"`
+	Name    string       `json:"name"`
+	Kind    ScheduleKind `json:"kind"`
 	// At is the local wall-clock time of a once schedule in Timezone,
 	// "YYYY-MM-DDTHH:MM".
 	At string `json:"at,omitempty"`
@@ -542,11 +551,14 @@ const (
 	ScheduleError   = "error"   // the run could not be started (LastMessage)
 )
 
-// Schedule starts runs of a test at planned times. GET /api/schedules.
+// Schedule starts runs of a test (or suite runs of a test suite) at
+// planned times. GET /api/schedules. LastRunID is a run ID, or a suite
+// run ID for a suite schedule.
 type Schedule struct {
 	ID string `json:"id"`
 	ScheduleSpec
-	TestName  string    `json:"test_name"` // filled on read
+	TestName  string    `json:"test_name"`            // filled on read; "" for a suite schedule
+	SuiteName string    `json:"suite_name,omitempty"` // filled on read; suite schedules only
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -686,4 +698,71 @@ type SuiteRun struct {
 	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
 	Items         []SuiteRunItem `json:"items"`
 	Error         string         `json:"error,omitempty"`
+}
+
+// ---- Notifications ---------------------------------------------------------
+
+// Notification channel kinds.
+const (
+	// NotifySlack posts {"text": ...} to a Slack incoming webhook.
+	NotifySlack = "slack"
+	// NotifyWebhook posts a JSON event document to any HTTP endpoint.
+	NotifyWebhook = "webhook"
+)
+
+// Notification events a channel can subscribe to.
+const (
+	// EventRunFinished fires when a run reaches a final status (passed,
+	// failed, stopped or error), including runs started by a suite.
+	EventRunFinished = "run_finished"
+	// EventSuiteFinished fires when a suite run reaches a final status.
+	EventSuiteFinished = "suite_finished"
+)
+
+// NotificationChannel is a destination for finish notifications. URL is a
+// secret (a Slack webhook URL grants posting rights): it is only held by
+// the stores and the notifier. API responses use NotificationView, which
+// carries a masked form instead.
+type NotificationChannel struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Kind is NotifySlack or NotifyWebhook.
+	Kind string `json:"kind"`
+	URL  string `json:"url"`
+	// Events lists the subscribed events (EventRunFinished,
+	// EventSuiteFinished).
+	Events []string `json:"events"`
+	// OnlyFailures limits notifications to failed or errored runs
+	// (stopped is not a failure).
+	OnlyFailures bool      `json:"only_failures"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// NotificationView is the API representation of a NotificationChannel:
+// the URL is never returned, only URLMasked.
+type NotificationView struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Kind         string    `json:"kind"`
+	URLMasked    string    `json:"url_masked"`
+	Events       []string  `json:"events"`
+	OnlyFailures bool      `json:"only_failures"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// NotificationRequest is the body of POST /api/notifications and
+// PUT /api/notifications/{id}. On update an empty URL keeps the stored one.
+// Enabled defaults to true on create and keeps the stored value on update
+// when omitted.
+type NotificationRequest struct {
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind"`
+	URL          string   `json:"url"`
+	Events       []string `json:"events"`
+	OnlyFailures bool     `json:"only_failures"`
+	Enabled      *bool    `json:"enabled,omitempty"`
 }

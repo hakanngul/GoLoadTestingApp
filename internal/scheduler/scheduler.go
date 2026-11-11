@@ -13,8 +13,8 @@
 //     the same database or a concurrent edit can never start the same
 //     occurrence twice. (A crash between the claim and the run start
 //     loses that occurrence instead.)
-//   - Overlap: "skip" skips an occurrence while any run is active on this
-//     server; "queue" waits until no run is active (at most the queue
+//   - Overlap: "skip" skips an occurrence while any run or suite run is
+//     active on this server; "queue" waits until none is active (at most the queue
 //     timeout, default 30 min), then starts it or records it as skipped.
 //     An occurrence still queued when the server stops is recorded as
 //     missed on the next start.
@@ -23,6 +23,10 @@
 //   - Runs start through the same runner.Manager.Start as the API (same
 //     target allowlist and validation) with the test's scenario after the
 //     schedule's load override (ApplyLoad) and record Run.ScheduleID.
+//   - A schedule may target a test suite instead (ScheduleSpec.SuiteID):
+//     the occurrence then starts a suite run through Options.Suites and
+//     Schedule.LastRunID is the suite run ID. Suite schedules carry no load
+//     override or workers (the suite items do).
 package scheduler
 
 import (
@@ -52,16 +56,34 @@ type Starter interface {
 	Active() []string
 }
 
+// SuiteStarter starts suite runs (implemented by *suite.Service).
+type SuiteStarter interface {
+	Start(ctx context.Context, id string, req model.StartSuiteRequest) (model.SuiteRun, error)
+	Active() []string
+}
+
+// RunResult is what RunNow started: a Run for a test schedule, a
+// SuiteRun for a suite schedule (exactly one is set).
+type RunResult struct {
+	Run      *model.Run
+	SuiteRun *model.SuiteRun
+}
+
 // Store is what the scheduler needs from a store.
 type Store interface {
 	store.ScheduleStore
 	GetTest(ctx context.Context, id string) (model.Test, error)
+	// GetSuite checks that a suite schedule's suite exists.
+	GetSuite(ctx context.Context, id string) (model.Suite, error)
 }
 
 // Options configures a Scheduler.
 type Options struct {
 	Store  Store   // required
 	Runner Starter // required
+	// Suites starts suite runs for suite schedules; nil = suite schedules
+	// fail with an error.
+	Suites SuiteStarter
 	// Now is the clock (tests). nil = time.Now.
 	Now    func() time.Time
 	Logger *slog.Logger
@@ -81,6 +103,7 @@ type Options struct {
 type Scheduler struct {
 	st      Store
 	runner  Starter
+	suites  SuiteStarter
 	now     func() time.Time
 	log     *slog.Logger
 	grace   time.Duration
@@ -94,7 +117,7 @@ type Scheduler struct {
 
 // New returns a Scheduler.
 func New(o Options) *Scheduler {
-	s := &Scheduler{st: o.Store, runner: o.Runner, now: o.Now, log: o.Logger,
+	s := &Scheduler{st: o.Store, runner: o.Runner, suites: o.Suites, now: o.Now, log: o.Logger,
 		grace: o.MissedGrace, tick: o.SafetyTick, poll: o.QueuePoll, kick: make(chan struct{}, 1)}
 	if s.now == nil {
 		s.now = time.Now
@@ -230,7 +253,7 @@ func (s *Scheduler) handleDue(ctx context.Context, sc model.Schedule, now time.T
 	}
 
 	s.startMu.Lock()
-	busy := len(s.runner.Active()) > 0
+	busy := s.busy()
 	switch {
 	case busy && sc.Overlap == model.OverlapQueue:
 		timeout := QueueTimeout(sc.ScheduleSpec)
@@ -259,6 +282,11 @@ func (s *Scheduler) handleDue(ctx context.Context, sc model.Schedule, now time.T
 		s.startMu.Unlock()
 	}
 	return next
+}
+
+// busy reports whether any run or suite run is active.
+func (s *Scheduler) busy() bool {
+	return len(s.runner.Active()) > 0 || (s.suites != nil && len(s.suites.Active()) > 0)
 }
 
 func fmtLocal(t time.Time, tm *timing) string {
@@ -303,7 +331,7 @@ func (s *Scheduler) waitAndStart(ctx context.Context, sc model.Schedule, due, de
 			return
 		default:
 			s.startMu.Lock()
-			if len(s.runner.Active()) == 0 {
+			if !s.busy() {
 				_, _ = s.start(ctx, cur, due)
 				s.startMu.Unlock()
 				return
@@ -331,19 +359,44 @@ func (s *Scheduler) result(ctx context.Context, id string, r store.ScheduleResul
 	}
 }
 
-// start starts a run of sc's test with its overrides and records the
-// outcome as the schedule's last result (at = due time or run-now time).
-func (s *Scheduler) start(ctx context.Context, sc model.Schedule, at time.Time) (model.Run, error) {
-	run, err := s.startRun(ctx, sc)
-	r := store.ScheduleResult{At: at, Status: model.ScheduleStarted, RunID: run.ID}
+// start starts a run of sc's test (or a suite run of its suite) with its
+// overrides and records the outcome as the schedule's last result (at =
+// due time or run-now time).
+func (s *Scheduler) start(ctx context.Context, sc model.Schedule, at time.Time) (RunResult, error) {
+	var (
+		res RunResult
+		id  string
+		err error
+	)
+	if sc.SuiteID != "" {
+		var sr model.SuiteRun
+		if sr, err = s.startSuite(ctx, sc); err == nil {
+			res.SuiteRun, id = &sr, sr.ID
+		}
+	} else {
+		var run model.Run
+		if run, err = s.startRun(ctx, sc); err == nil {
+			res.Run, id = &run, run.ID
+		}
+	}
+	r := store.ScheduleResult{At: at, Status: model.ScheduleStarted, RunID: id}
 	if err != nil {
 		r = store.ScheduleResult{At: at, Status: model.ScheduleError, Message: err.Error()}
 		s.log.Warn("scheduler: start run", "schedule", sc.ID, "name", sc.Name, "error", r.Message)
 	} else {
-		s.log.Info("scheduler: started run", "schedule", sc.ID, "name", sc.Name, "run", run.ID)
+		s.log.Info("scheduler: started run", "schedule", sc.ID, "name", sc.Name, "run", id)
 	}
 	s.result(context.WithoutCancel(ctx), sc.ID, r)
-	return run, err
+	return res, err
+}
+
+func (s *Scheduler) startSuite(ctx context.Context, sc model.Schedule) (model.SuiteRun, error) {
+	if s.suites == nil {
+		return model.SuiteRun{}, errors.New("test suites are not available on this server")
+	}
+	sctx, cancel := context.WithTimeout(ctx, startTimeout)
+	defer cancel()
+	return s.suites.Start(sctx, sc.SuiteID, model.StartSuiteRequest{Label: RunLabel(sc.ScheduleSpec)})
 }
 
 func (s *Scheduler) startRun(ctx context.Context, sc model.Schedule) (model.Run, error) {
@@ -381,7 +434,15 @@ func (s *Scheduler) prepare(ctx context.Context, req model.ScheduleRequest) (mod
 	Normalize(&spec)
 	enabled := req.Enabled == nil || *req.Enabled
 	var yaml string
-	if spec.TestID != "" {
+	if spec.SuiteID != "" && spec.TestID == "" {
+		_, err := s.st.GetSuite(ctx, spec.SuiteID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return model.Schedule{}, &ValidationError{Details: []string{"items/suite_id: no such suite"}}
+		case err != nil:
+			return model.Schedule{}, err
+		}
+	} else if spec.TestID != "" && spec.SuiteID == "" {
 		test, err := s.st.GetTest(ctx, spec.TestID)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -447,12 +508,13 @@ func (s *Scheduler) Delete(ctx context.Context, id string) error {
 	return err
 }
 
-// RunNow starts a run of the schedule immediately, regardless of its
-// timing, enabled state and overlap policy; next_run_at is unchanged.
-func (s *Scheduler) RunNow(ctx context.Context, id string) (model.Run, error) {
+// RunNow starts a run (or, for a suite schedule, a suite run) of the
+// schedule immediately, regardless of its timing, enabled state and
+// overlap policy; next_run_at is unchanged.
+func (s *Scheduler) RunNow(ctx context.Context, id string) (RunResult, error) {
 	sc, err := s.st.GetSchedule(ctx, id)
 	if err != nil {
-		return model.Run{}, err
+		return RunResult{}, err
 	}
 	s.startMu.Lock()
 	defer s.startMu.Unlock()

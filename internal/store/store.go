@@ -197,3 +197,20 @@ type SuiteStore interface {
 	// ListSuiteRuns returns suite runs newest started first.
 	ListSuiteRuns(ctx context.Context, f SuiteRunFilter) ([]model.SuiteRun, error)
 }
+
+// NotificationStore is the notification-channel side of a store. Every
+// Store in this package implements it; it is a separate interface so test
+// doubles of Store need not. The channel URL is a secret: it is stored and
+// returned here in full, and the API layer must mask it.
+type NotificationStore interface {
+	// ListNotificationChannels returns every channel, oldest created
+	// first.
+	ListNotificationChannels(ctx context.Context) ([]model.NotificationChannel, error)
+	GetNotificationChannel(ctx context.Context, id string) (model.NotificationChannel, error)
+	// CreateNotificationChannel stores c with a fresh ID and timestamps.
+	CreateNotificationChannel(ctx context.Context, c model.NotificationChannel) (model.NotificationChannel, error)
+	// UpdateNotificationChannel replaces everything but ID and CreatedAt
+	// and bumps UpdatedAt. Unknown: ErrNotFound.
+	UpdateNotificationChannel(ctx context.Context, c model.NotificationChannel) (model.NotificationChannel, error)
+	DeleteNotificationChannel(ctx context.Context, id string) error
+}

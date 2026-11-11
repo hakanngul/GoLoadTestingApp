@@ -4,7 +4,7 @@ import { api } from '../api/client';
 import type { Schedule, ScheduleRequest } from '../api/types';
 import { ConfirmDialog, ErrorAlert, Icon, Loading } from '../components/ui';
 import { useAsync, useNow } from '../lib/hooks';
-import { describeLoad, describeWhen, fmtInZone, fmtRelative, statusTone } from '../lib/schedule';
+import { describeScheduleLoad, describeWhen, fmtInZone, fmtRelative, lastRunLink, runNowPath, statusTone } from '../lib/schedule';
 
 // The dialog renders a recharts preview; load it on demand.
 const ScheduleDialog = lazy(() => import('../components/ScheduleDialog').then((m) => ({ default: m.ScheduleDialog })));
@@ -12,6 +12,7 @@ const ScheduleDialog = lazy(() => import('../components/ScheduleDialog').then((m
 function toRequest(s: Schedule, enabled: boolean): ScheduleRequest {
   return {
     test_id: s.test_id,
+    suite_id: s.suite_id,
     name: s.name,
     kind: s.kind,
     at: s.at,
@@ -66,8 +67,7 @@ export function SchedulesPage() {
     setBusyId(s.id);
     setActionErr(null);
     try {
-      const run = await api.runScheduleNow(s.id);
-      nav(`/runs/${run.id}`);
+      nav(runNowPath(await api.runScheduleNow(s.id)));
     } catch (e) {
       setActionErr(e);
       setBusyId('');
@@ -97,7 +97,7 @@ export function SchedulesPage() {
       <div className="page-head">
         <div>
           <h1>Schedules</h1>
-          <div className="page-sub">Planned runs — once at a date and time, or on a repeating schedule</div>
+          <div className="page-sub">Planned runs of a test or a test suite — once at a date and time, or on a repeating schedule</div>
         </div>
         <span className="spacer" />
         <button className="btn primary" onClick={() => setEditing('new')} disabled={noTests || !tests.data}>
@@ -142,86 +142,100 @@ export function SchedulesPage() {
                 </tr>
               </thead>
               <tbody>
-                {list.map((s) => (
-                  <tr key={s.id} id={`sched-${s.id}`} className={s.id === focus ? 'focus-row' : ''}>
-                    <td className="name-cell">
-                      <button className="linklike" onClick={() => setEditing(s)}>
-                        {s.name}
-                      </button>
-                      <div className="sub">
-                        <Link to={`/tests/${s.test_id}`}>{s.test_name}</Link>
-                        {s.workers > 1 ? ` · ${s.workers} workers` : ''}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="when-cell">{describeWhen(s)}</div>
-                      <div className="sub muted">{s.overlap === 'queue' ? 'waits if a run is active' : 'skips if a run is active'}</div>
-                    </td>
-                    <td>
-                      {s.enabled && s.next_run_at ? (
-                        <>
-                          <div className="num-left">{fmtInZone(s.next_run_at, s.timezone)}</div>
-                          <div className="sub accent-text">{fmtRelative(s.next_run_at, now)}</div>
-                        </>
-                      ) : (
-                        <span className="muted">{s.enabled ? '—' : s.kind === 'once' && s.last_status ? 'done' : 'paused'}</span>
-                      )}
-                    </td>
-                    <td>
-                      {s.last_status ? (
-                        <div title={s.last_message || undefined}>
-                          <span className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
-                            <span className={`badge ${statusTone(s.last_status)}`}>{s.last_status}</span>
-                            {s.last_run_id && s.last_status === 'started' && (
-                              <Link to={`/runs/${s.last_run_id}`} className="small-link">
-                                view run
-                              </Link>
-                            )}
-                          </span>
-                          <div className="sub muted">
-                            {fmtRelative(s.last_run_at, now)}
-                            {s.last_message ? ` · ${s.last_message}` : ''}
-                          </div>
+                {list.map((s) => {
+                  const link = lastRunLink(s);
+                  return (
+                    <tr key={s.id} id={`sched-${s.id}`} className={s.id === focus ? 'focus-row' : ''}>
+                      <td className="name-cell">
+                        <button className="linklike" onClick={() => setEditing(s)}>
+                          {s.name}
+                        </button>
+                        <div className="sub">
+                          {s.suite_id ? (
+                            <>
+                              Suite: <Link to={`/suites/${s.suite_id}`}>{s.suite_name || s.suite_id}</Link>
+                            </>
+                          ) : (
+                            <Link to={`/tests/${s.test_id}`}>{s.test_name}</Link>
+                          )}
+                          {s.workers > 1 ? ` · ${s.workers} workers` : ''}
                         </div>
-                      ) : (
-                        <span className="muted">not run yet</span>
-                      )}
-                    </td>
-                    <td className="text-2 load-cell">{describeLoad(s.load)}</td>
-                    <td>
-                      <button
-                        className={`switch ${s.enabled ? 'on' : ''}`}
-                        role="switch"
-                        aria-checked={s.enabled}
-                        aria-label={`${s.enabled ? 'Disable' : 'Enable'} ${s.name}`}
-                        disabled={busyId === s.id || (!s.enabled && s.kind === 'once')}
-                        title={!s.enabled && s.kind === 'once' ? 'Edit the date to enable a one-time schedule again' : undefined}
-                        onClick={() => toggle(s)}
-                      >
-                        <span className="switch-knob" />
-                      </button>
-                    </td>
-                    <td className="actions">
-                      <button className="btn sm" onClick={() => runNow(s)} disabled={busyId === s.id} title="Start a run now with this schedule's settings">
-                        <Icon name="play" size={11} /> Run
-                      </button>
-                      <button className="btn sm ghost icon" onClick={() => setEditing(s)} title="Edit" aria-label={`Edit ${s.name}`}>
-                        <Icon name="edit" size={14} />
-                      </button>
-                      <button
-                        className="btn sm ghost icon danger"
-                        onClick={() => {
-                          setDelErr(null);
-                          setDeleting(s);
-                        }}
-                        title="Delete"
-                        aria-label={`Delete ${s.name}`}
-                      >
-                        <Icon name="trash" size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>
+                        <div className="when-cell">{describeWhen(s)}</div>
+                        <div className="sub muted">{s.overlap === 'queue' ? 'waits if a run is active' : 'skips if a run is active'}</div>
+                      </td>
+                      <td>
+                        {s.enabled && s.next_run_at ? (
+                          <>
+                            <div className="num-left">{fmtInZone(s.next_run_at, s.timezone)}</div>
+                            <div className="sub accent-text">{fmtRelative(s.next_run_at, now)}</div>
+                          </>
+                        ) : (
+                          <span className="muted">{s.enabled ? '—' : s.kind === 'once' && s.last_status ? 'done' : 'paused'}</span>
+                        )}
+                      </td>
+                      <td>
+                        {s.last_status ? (
+                          <div title={s.last_message || undefined}>
+                            <span className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+                              <span className={`badge ${statusTone(s.last_status)}`}>{s.last_status}</span>
+                              {link && (
+                                <Link to={link.to} className="small-link">
+                                  {link.label}
+                                </Link>
+                              )}
+                            </span>
+                            <div className="sub muted">
+                              {fmtRelative(s.last_run_at, now)}
+                              {s.last_message ? ` · ${s.last_message}` : ''}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="muted">not run yet</span>
+                        )}
+                      </td>
+                      <td className="text-2 load-cell">{describeScheduleLoad(s)}</td>
+                      <td>
+                        <button
+                          className={`switch ${s.enabled ? 'on' : ''}`}
+                          role="switch"
+                          aria-checked={s.enabled}
+                          aria-label={`${s.enabled ? 'Disable' : 'Enable'} ${s.name}`}
+                          disabled={busyId === s.id || (!s.enabled && s.kind === 'once')}
+                          title={!s.enabled && s.kind === 'once' ? 'Edit the date to enable a one-time schedule again' : undefined}
+                          onClick={() => toggle(s)}
+                        >
+                          <span className="switch-knob" />
+                        </button>
+                      </td>
+                      <td className="actions">
+                        <button
+                          className="btn sm"
+                          onClick={() => runNow(s)}
+                          disabled={busyId === s.id}
+                          title="Start a run now with this schedule's settings"
+                        >
+                          <Icon name="play" size={11} /> Run
+                        </button>
+                        <button className="btn sm ghost icon" onClick={() => setEditing(s)} title="Edit" aria-label={`Edit ${s.name}`}>
+                          <Icon name="edit" size={14} />
+                        </button>
+                        <button
+                          className="btn sm ghost icon danger"
+                          onClick={() => {
+                            setDelErr(null);
+                            setDeleting(s);
+                          }}
+                          title="Delete"
+                          aria-label={`Delete ${s.name}`}
+                        >
+                          <Icon name="trash" size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

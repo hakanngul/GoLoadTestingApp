@@ -73,6 +73,8 @@ export interface ThresholdResult {
   value: number;
   actual: number;
   passed: boolean;
+  /** Baseline run's value; set on regression rows (metric "<name> vs baseline"). */
+  baseline?: number;
 }
 
 /** One second of a run (live stream and stored time series). */
@@ -411,7 +413,10 @@ export interface LoadOverride {
 }
 
 export interface ScheduleSpec {
-  test_id: string;
+  /** The test to run. Exactly one of test_id / suite_id is set. */
+  test_id?: string;
+  /** The test suite to run (a suite schedule has no load override and no workers). */
+  suite_id?: string;
   name: string;
   kind: ScheduleKind;
   /** once: local wall time "YYYY-MM-DDTHH:MM" in timezone. */
@@ -430,12 +435,16 @@ export interface ScheduleSpec {
 
 export interface Schedule extends ScheduleSpec {
   id: string;
+  /** "" for a suite schedule. */
   test_name: string;
+  /** Suite schedules only. */
+  suite_name?: string;
   enabled: boolean;
   created_at: string;
   updated_at: string;
   next_run_at?: string;
   last_run_at?: string;
+  /** A run ID, or a suite run ID for a suite schedule. */
   last_run_id?: string;
   last_status?: ScheduleStatus;
   last_message?: string;
@@ -443,6 +452,11 @@ export interface Schedule extends ScheduleSpec {
 
 export interface ScheduleRequest extends ScheduleSpec {
   enabled?: boolean;
+}
+
+/** Response of POST /api/schedules/{id}/run-now for a suite schedule. */
+export interface ScheduleSuiteRunResponse {
+  suite_run: SuiteRun;
 }
 
 export interface SchedulePreviewRequest {
@@ -532,5 +546,43 @@ export interface SuiteRun {
   started_at: string;
   finished_at?: string;
   items: SuiteRunItem[];
+  error?: string;
+}
+
+// ---------- notifications ----------
+
+export type NotificationKind = 'slack' | 'webhook';
+export type NotificationEvent = 'run_finished' | 'suite_finished';
+
+/**
+ * A notification channel as returned by the API. The webhook URL is a
+ * secret and is never sent back: only a masked form is available.
+ */
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  kind: NotificationKind;
+  /** e.g. `https://hooks.slack.com/…a1b2` */
+  url_masked: string;
+  events: NotificationEvent[];
+  only_failures: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationRequest {
+  name: string;
+  kind: NotificationKind;
+  /** Empty on update keeps the stored URL. */
+  url: string;
+  events: NotificationEvent[];
+  only_failures: boolean;
+  enabled: boolean;
+}
+
+/** Result of POST /api/notifications/{id}/test. */
+export interface NotificationTestResult {
+  ok: boolean;
   error?: string;
 }

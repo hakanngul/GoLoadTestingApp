@@ -85,7 +85,10 @@ test('time zones', () => {
   assert.equal(fmtInZone(undefined, 'UTC'), '—');
   const zones = timezoneList('Mars/Base');
   assert.ok(zones.includes('UTC') && zones.includes('Europe/Istanbul') && zones.includes('Mars/Base'));
-  assert.deepEqual([...zones].sort((a, b) => a.localeCompare(b)), zones);
+  assert.deepEqual(
+    [...zones].sort((a, b) => a.localeCompare(b)),
+    zones,
+  );
 });
 
 test('fmtRelative', () => {
@@ -125,7 +128,10 @@ test('buildLoadOverride', () => {
   });
   const bad = buildLoadOverride({ ...base, mode: 'profile', target: '0', hold: 'x', rampUp: '-' }, 'closed');
   assert.equal(bad.load, undefined);
-  assert.deepEqual(Object.keys(bad.errors).sort((a, b) => a.localeCompare(b)), ['load.hold_ms', 'load.ramp_up_ms', 'load.users']);
+  assert.deepEqual(
+    Object.keys(bad.errors).sort((a, b) => a.localeCompare(b)),
+    ['load.hold_ms', 'load.ramp_up_ms', 'load.users'],
+  );
   // Round trip through the form.
   const f = loadFormFromOverride({ mode: 'profile', rate: 40, ramp_up_ms: 0, hold_ms: 90000, ramp_down_ms: 0 }, 'closed', 5);
   assert.deepEqual(f, { mode: 'profile', unit: 'rate', target: '40', rampUp: '0s', hold: '1m30s', rampDown: '0s' });
@@ -183,4 +189,24 @@ test('describeLoad', async () => {
   assert.equal(describeLoad({ mode: 'profile', users: 2, ramp_up_ms: 0, hold_ms: 20000 }), '2 VUs · ramp 1s, hold 20s');
   // Sub-millisecond ramps round to 0 on the server, which then runs the 1 s instant ramp.
   assert.equal(describeLoad({ mode: 'profile', users: 2, ramp_up_ms: 0.4, hold_ms: 20000 }), '2 VUs · ramp 1s, hold 20s');
+});
+
+test('suite schedule helpers', async () => {
+  const { targetOf, targetFields, describeScheduleLoad, lastRunLink, runNowPath } = await import('../src/lib/schedule.ts');
+  assert.equal(targetOf({ suite_id: 's1' }), 'suite');
+  assert.equal(targetOf({}), 'test');
+  assert.deepEqual(targetFields('suite', 't1', 's1'), { suite_id: 's1' });
+  assert.deepEqual(targetFields('test', 't1', 's1'), { test_id: 't1' });
+  assert.equal(describeScheduleLoad({ suite_id: 's1' }), 'Per test in the suite');
+  assert.equal(describeScheduleLoad({}), 'Scenario load');
+  assert.equal(describeScheduleLoad({ load: { mode: 'scale', users: 20 } }), 'Peak 20 VUs (scaled)');
+  assert.deepEqual(lastRunLink({ suite_id: 's1', last_run_id: 'r1', last_status: 'started' }), {
+    to: '/suite-runs/r1',
+    label: 'view suite run',
+  });
+  assert.deepEqual(lastRunLink({ last_run_id: 'r1', last_status: 'started' }), { to: '/runs/r1', label: 'view run' });
+  assert.equal(lastRunLink({ suite_id: 's1', last_run_id: 'r1', last_status: 'skipped' }), null);
+  assert.equal(lastRunLink({ suite_id: 's1', last_status: 'started' }), null);
+  assert.equal(runNowPath({ id: 'r9' }), '/runs/r9');
+  assert.equal(runNowPath({ suite_run: { id: 'sr9' } }), '/suite-runs/sr9');
 });

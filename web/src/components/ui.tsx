@@ -68,6 +68,7 @@ const paths: Record<string, ReactNode> = {
   chevron: <path d="M4.5 6.5L8 10l3.5-3.5" />,
   suite: <path d="M2.5 4.5L8 2l5.5 2.5L8 7zM2.5 8L8 10.5 13.5 8M2.5 11.5L8 14l5.5-2.5" />,
   flag: <path d="M3.5 14V2.5M3.5 3h8l-2 3 2 3h-8" />,
+  bell: <path d="M3.5 11.5h9l-1.2-1.8V7a3.3 3.3 0 00-6.6 0v2.7zM6.7 13.5a1.4 1.4 0 002.6 0" />,
   grip: <path d="M6 4h.01M10 4h.01M6 8h.01M10 8h.01M6 12h.01M10 12h.01" strokeWidth="2.2" />,
   search: (
     <>

@@ -23,6 +23,8 @@ type fakeStore struct {
 	samples   map[string][]model.ErrorSample
 	groups    map[string][]model.ErrorGroup
 
+	tests map[string]model.Test // GetTest results (absent: ErrNotFound)
+
 	failMetrics bool // AppendMetric / AppendErrorSamples return an error
 }
 
@@ -42,7 +44,12 @@ func newFakeStore() *fakeStore {
 var errFake = errors.New("fake store failure")
 
 func (s *fakeStore) ListTests(context.Context) ([]model.Test, error) { return nil, nil }
-func (s *fakeStore) GetTest(context.Context, string) (model.Test, error) {
+func (s *fakeStore) GetTest(_ context.Context, id string) (model.Test, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.tests[id]; ok {
+		return t, nil
+	}
 	return model.Test{}, store.ErrNotFound
 }
 func (s *fakeStore) CreateTest(_ context.Context, t model.Test) (model.Test, error) { return t, nil }

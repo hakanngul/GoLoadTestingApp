@@ -129,6 +129,12 @@ type Options struct {
 	// ProvisionTimeout bounds waiting for launched workers to connect.
 	// 0 means DefaultProvisionTimeout.
 	ProvisionTimeout time.Duration
+
+	// OnFinish, if set, is called once per run after its final status
+	// (passed, failed, stopped or error; local and remote runs) has been
+	// persisted, with the stored run. It runs on the run's goroutine and
+	// must not block: hand the run to a queue (see package notify).
+	OnFinish func(model.Run)
 }
 
 // Manager runs tests in-process. It implements Runner and is safe for
@@ -149,6 +155,7 @@ type Manager struct {
 	masterAddr       string
 	workerToken      string
 	provisionTimeout time.Duration
+	onFinish         func(model.Run)
 
 	mu     sync.Mutex
 	runs   map[string]*activeRun
@@ -175,6 +182,7 @@ func NewManager(opts Options) *Manager {
 		masterAddr:       opts.MasterAddr,
 		workerToken:      opts.WorkerToken,
 		provisionTimeout: opts.ProvisionTimeout,
+		onFinish:         opts.OnFinish,
 	}
 	if m.provisionTimeout <= 0 {
 		m.provisionTimeout = DefaultProvisionTimeout
