@@ -8,6 +8,7 @@ import (
 
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
+	"github.com/hakanngul/GoLoadTestingApp/internal/scheduler"
 	"github.com/hakanngul/GoLoadTestingApp/internal/store"
 )
 
@@ -30,6 +31,18 @@ func (s *server) handleStartRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
+	}
+	if req.Load != nil {
+		if details := scheduler.CheckLoad(req.Load, t.YAML); len(details) > 0 {
+			s.writeErr(w, r, &httpError{status: http.StatusBadRequest, msg: "invalid load override", details: details})
+			return
+		}
+		y, err := scheduler.ApplyLoad(t.YAML, req.Load)
+		if err != nil {
+			s.writeErr(w, r, badRequest("invalid load override: %v", err))
+			return
+		}
+		t.YAML = y
 	}
 	run, err := s.runner.Start(r.Context(), t, req)
 	if err != nil {
