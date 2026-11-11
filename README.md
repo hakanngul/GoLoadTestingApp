@@ -152,6 +152,23 @@ steps:
 
 > **Behaviour change.** Earlier versions never followed redirects and kept no cookies. A step that expects a redirect status (`assert: status 301/302`, or `extract` of the `Location` header) now sees the final response instead: add `follow_redirects: false` to that step. Scenarios that sent a `Cookie` header by hand keep working. To get the old behaviour everywhere, set `target.cookies: false` and `target.follow_redirects: false`.
 
+### Regression check against the baseline run
+
+A test can have a baseline run (**Set as baseline** on a run). With `regression` rules the finished run's whole-run summary is compared with the baseline's, and a rule that is violated fails the run just like a failed threshold.
+
+```yaml
+regression:
+  - {metric: p95_ms, max_increase_pct: 20}      # p95 may be at most 20% slower
+  - {metric: error_rate, max_increase: 0.01}    # absolute: at most +1 percentage point
+  - {metric: rps, max_decrease_pct: 10}         # throughput may drop at most 10%
+```
+
+- `metric`: `p50_ms`, `p90_ms`, `p95_ms`, `p99_ms`, `mean_ms`, `max_ms`, `error_rate` (fraction) or `rps`.
+- Exactly one limit per rule: `max_increase_pct` (run <= baseline x (1 + N/100)), `max_increase` (run <= baseline + N), `max_decrease_pct` (run >= baseline x (1 - N/100)) or `max_decrease` (run >= baseline - N). Values must not be negative.
+- Each rule adds a result named like `p95_ms vs baseline` to the run's thresholds, with the computed limit (rounded to 3 decimals) and the baseline value. A percentage limit on a baseline of 0 allows no movement (N% of 0 is 0).
+- Checked when the run ends, locally and in distributed mode; stopped and error runs keep their status. Without a usable baseline (none set, it is the run itself, or it has no summary) the check is skipped with a run warning and the run is not failed.
+- `goloadtest run` has no stored baseline, so it prints a note and skips the rules.
+
 ### Authentication
 
 An `auth:` block authenticates iterations without making login a step of every iteration:

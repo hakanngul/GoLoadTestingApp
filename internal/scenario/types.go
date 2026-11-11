@@ -15,6 +15,10 @@ type Scenario struct {
 	Auth       *Auth       `yaml:"auth,omitempty"`
 	Steps      []Step      `yaml:"steps"`
 	Thresholds []Threshold `yaml:"thresholds,omitempty"`
+	// Regression compares the finished run with the test's baseline run
+	// (see RegressionRule). Evaluated by the server at run end; the plain
+	// CLI "run" has no baseline and skips it.
+	Regression []RegressionRule `yaml:"regression,omitempty"`
 }
 
 // Target holds connection-level settings shared by every step.
@@ -222,6 +226,28 @@ type Threshold struct {
 	Metric string  `yaml:"metric"`
 	Op     string  `yaml:"op"`
 	Value  float64 `yaml:"value"`
+}
+
+// RegressionRule limits how far a whole-run metric may move away from the
+// same metric of the test's baseline run. Exactly one limit must be set.
+//
+// Metric is one of p50_ms p90_ms p95_ms p99_ms mean_ms max_ms error_rate rps
+// (the names of model.Summary; error_rate is a fraction, 0.01 = 1%).
+//
+// Limits, with B the baseline value:
+//
+//	max_increase_pct: N  run <= B * (1 + N/100)
+//	max_increase:     N  run <= B + N          (absolute, in the metric's unit)
+//	max_decrease_pct: N  run >= B * (1 - N/100)
+//	max_decrease:     N  run >= B - N          (absolute)
+//
+// With B = 0 a percentage limit allows no movement at all (N% of 0 is 0).
+type RegressionRule struct {
+	Metric         string   `yaml:"metric"`
+	MaxIncreasePct *float64 `yaml:"max_increase_pct,omitempty"`
+	MaxIncrease    *float64 `yaml:"max_increase,omitempty"`
+	MaxDecreasePct *float64 `yaml:"max_decrease_pct,omitempty"`
+	MaxDecrease    *float64 `yaml:"max_decrease,omitempty"`
 }
 
 // Duration is a time.Duration that unmarshals from YAML strings like "30s".

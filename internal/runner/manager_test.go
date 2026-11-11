@@ -711,3 +711,81 @@ func TestTruncate(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// baselineRun seeds a finished run with the given p95 as the test's baseline.
+func seedBaseline(st *fakeStore, p95 float64) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.runs["base-1"] = model.Run{ID: "base-1", TestID: "test-1", Status: model.RunPassed, Summary: &model.Summary{P95Ms: p95, ErrorRate: 0, RPS: 1}}
+	st.tests = map[string]model.Test{"test-1": {ID: "test-1", BaselineRunID: "base-1"}}
+}
+
+func TestRegressionAgainstBaseline(t *testing.T) {
+	t.Parallel()
+	const rules = `regression:
+  - {metric: p95_ms, max_increase_pct: 20}
+  - {metric: error_rate, max_increase: 0.01}
+`
+	srv := target(t, http.StatusOK)
+	yaml := scenarioYAML(srv.URL, "800ms", 20, "/", rules)
+
+	// Baseline p95 of 0.000001ms: any real latency regresses.
+	st := newFakeStore()
+	seedBaseline(st, 0.000001)
+	m := newManager(t, st, nil)
+	run, err := m.Start(context.Background(), testFor(yaml), model.StartRunRequest{Workers: 1})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	fin := waitFinished(t, st, run.ID, 10*time.Second)
+	if fin.Status != model.RunFailed {
+		t.Fatalf("status = %s (err %q), want failed", fin.Status, fin.Error)
+	}
+	if len(fin.Thresholds) != 2 || fin.Thresholds[0].Metric != "p95_ms vs baseline" || fin.Thresholds[0].Passed ||
+		fin.Thresholds[0].Op != "lte" || fin.Thresholds[0].Baseline == nil || !fin.Thresholds[1].Passed {
+		t.Fatalf("thresholds = %+v", fin.Thresholds)
+	}
+
+	// A huge baseline p95: passes.
+	st2 := newFakeStore()
+	seedBaseline(st2, 1e6)
+	m2 := newManager(t, st2, nil)
+	run2, err := m2.Start(context.Background(), testFor(yaml), model.StartRunRequest{Workers: 1})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	fin2 := waitFinished(t, st2, run2.ID, 10*time.Second)
+	if fin2.Status != model.RunPassed || len(fin2.Thresholds) != 2 || len(fin2.Warnings) != 0 {
+		t.Fatalf("status %s thresholds %+v warnings %v", fin2.Status, fin2.Thresholds, fin2.Warnings)
+	}
+}
+
+func TestRegressionNoBaselineWarns(t *testing.T) {
+	t.Parallel()
+	st := newFakeStore() // GetTest: not found
+	m := newManager(t, st, nil)
+	srv := target(t, http.StatusOK)
+	yaml := scenarioYAML(srv.URL, "500ms", 20, "/", "regression:\n  - {metric: p95_ms, max_increase_pct: 20}\n")
+	run, err := m.Start(context.Background(), testFor(yaml), model.StartRunRequest{Workers: 1})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	fin := waitFinished(t, st, run.ID, 10*time.Second)
+	if fin.Status != model.RunPassed || len(fin.Thresholds) != 0 || !hasWarning(fin, "regression check skipped: no baseline run") {
+		t.Fatalf("status %s thresholds %+v warnings %v", fin.Status, fin.Thresholds, fin.Warnings)
+	}
+
+	// Baseline without a summary.
+	st2 := newFakeStore()
+	st2.runs["base-1"] = model.Run{ID: "base-1", TestID: "test-1", Status: model.RunError}
+	st2.tests = map[string]model.Test{"test-1": {ID: "test-1", BaselineRunID: "base-1"}}
+	m2 := newManager(t, st2, nil)
+	run2, err := m2.Start(context.Background(), testFor(yaml), model.StartRunRequest{Workers: 1})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	fin2 := waitFinished(t, st2, run2.ID, 10*time.Second)
+	if fin2.Status != model.RunPassed || !hasWarning(fin2, "baseline run has no summary") {
+		t.Fatalf("status %s warnings %v", fin2.Status, fin2.Warnings)
+	}
+}

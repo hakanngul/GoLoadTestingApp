@@ -91,6 +91,10 @@ type ThresholdResult struct {
 	Value  float64 `json:"value"`
 	Actual float64 `json:"actual"`
 	Passed bool    `json:"passed"`
+	// Baseline is the baseline run's value of the metric. Set only on
+	// regression results (Metric "<name> vs baseline"); Value is then the
+	// allowed limit derived from it.
+	Baseline *float64 `json:"baseline,omitempty"`
 }
 
 // MetricPoint is one second of a run (live stream and stored time series).
