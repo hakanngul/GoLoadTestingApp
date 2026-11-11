@@ -22,6 +22,7 @@ import {
 import { fmtRegressionValue, isRegression, regressionMetric, regressionRule } from '../lib/regression';
 import { useAsync, useNow } from '../lib/hooks';
 import { OP_SYMBOL, summarizeYaml, unitFor } from '../lib/scenario';
+import { formatStartedBy } from '../lib/tokens';
 import { remoteWorkers } from '../lib/workers';
 import { errorStatusLabel, errorStatusTone } from '../lib/livestats';
 import {
@@ -80,6 +81,7 @@ function RunHeader({ run, children }: { run: Run; children?: ReactNode }) {
             </span>
           )}
         </h1>
+        {run.started_by && <div className="page-sub">Started by {formatStartedBy(run.started_by)}</div>}
       </div>
       <span className="spacer" />
       {children}

@@ -5,6 +5,7 @@ import { ErrorAlert, Icon, Kpi, Loading, StatusBadge } from '../components/ui';
 import { fmtDateTime, fmtMs, fmtPct, fmtRps, fmtSeconds, runDurationS } from '../lib/format';
 import { useAsync, useNow } from '../lib/hooks';
 import { describeLoad } from '../lib/schedule';
+import { formatStartedBy } from '../lib/tokens';
 import { describeMode, isActive, itemDurationS, itemTone, progress } from '../lib/suite';
 
 /** One suite run: live progress of each test case and its key numbers. */
@@ -58,6 +59,7 @@ export function SuiteRunPage() {
           <div className="page-sub">
             {fmtDateTime(r.started_at)} · {describeMode(r)}
             {r.label ? ` · ${r.label}` : ''}
+            {r.started_by ? ` · Started by ${formatStartedBy(r.started_by)}` : ''}
           </div>
         </div>
         <span className="spacer" />
