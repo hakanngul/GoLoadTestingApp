@@ -15,8 +15,9 @@ import {
   YAxis,
   type TooltipProps,
 } from 'recharts';
-import type { MetricPoint } from '../api/types';
+import type { HistBucket, MetricPoint } from '../api/types';
 import { fmtClock, fmtCompact, fmtMs, fmtRps, fmtSeconds } from '../lib/format';
+import { bucketIndexFor, bucketRange, fmtEdgeMs, fmtShare, histRows, type HistRow } from '../lib/histogram';
 import { trimPartialTail } from '../lib/metrics';
 import type { ProfilePoint } from '../lib/scenario';
 
@@ -71,6 +72,8 @@ export interface Series {
   label: string;
   color: string;
   dashed?: boolean;
+  /** Plot on the secondary (right) y axis, e.g. load next to latency. */
+  axis?: 'right';
 }
 
 type Row = Record<string, number | null | undefined>;
@@ -81,11 +84,14 @@ function ChartTooltip({
   label,
   series,
   fmt,
+  fmtRight,
   xLabel,
   headText,
 }: TooltipProps<number, string> & {
   series: Series[];
   fmt: (v: number) => string;
+  /** Formatter of right-axis series (defaults to `fmt`). */
+  fmtRight?: (v: number) => string;
   xLabel?: (x: number) => string;
   /** Head text from the raw (string) category label instead of xLabel. */
   headText?: (label: string) => string;
@@ -102,7 +108,9 @@ function ChartTooltip({
           <div className="tt-row" key={s.key}>
             <i style={{ background: s.color }} />
             <span className="text-2">{s.label}</span>
-            <span className="tt-v">{typeof v === 'number' && Number.isFinite(v) ? fmt(v) : '—'}</span>
+            <span className="tt-v">
+              {typeof v === 'number' && Number.isFinite(v) ? (s.axis === 'right' && fmtRight ? fmtRight(v) : fmt(v)) : '—'}
+            </span>
           </div>
         );
       })}
@@ -124,17 +132,7 @@ export function Legend({ series }: { series: Series[] }) {
   );
 }
 
-export function ChartCard({
-  title,
-  series,
-  children,
-  extra,
-}: {
-  title: string;
-  series: Series[];
-  children: ReactNode;
-  extra?: ReactNode;
-}) {
+export function ChartCard({ title, series, children, extra }: { title: string; series: Series[]; children: ReactNode; extra?: ReactNode }) {
   return (
     <div className="card chart-card">
       <div className="card-head">
@@ -155,6 +153,7 @@ export function TimeSeriesChart({
   height = 220,
   xMax,
   yFmt = fmtCompact,
+  yFmtRight = fmtCompact,
   integerY = false,
   emptyText = 'Waiting for data…',
   highlight,
@@ -165,6 +164,8 @@ export function TimeSeriesChart({
   fmt: (v: number) => string;
   /** Y axis tick formatter. */
   yFmt?: (v: number) => string;
+  /** Right y axis tick / tooltip formatter (series with `axis: 'right'`). */
+  yFmtRight?: (v: number) => string;
   /** Only integer y ticks (counts). */
   integerY?: boolean;
   height?: number;
@@ -185,13 +186,14 @@ export function TimeSeriesChart({
       </div>
     );
   }
+  const hasRight = series.some((s) => s.axis === 'right');
   const domainMax = xMax && xMax > 0 ? Math.max(xMax, Number(data[data.length - 1]?.elapsed ?? 0)) : 'dataMax';
   return (
     <div style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart
           data={data}
-          margin={{ top: 6, right: 12, bottom: 0, left: 4 }}
+          margin={{ top: 6, right: hasRight ? 4 : 12, bottom: 0, left: 4 }}
           style={onSelectRange ? { cursor: 'crosshair', userSelect: 'none' } : undefined}
           onMouseDown={
             onSelectRange
@@ -231,9 +233,7 @@ export function TimeSeriesChart({
               strokeDasharray="3 3"
               ifOverflow="extendDomain"
               label={
-                highlight.label
-                  ? { value: highlight.label, position: 'insideBottom', fill: pal['--text-3'], fontSize: 10.5 }
-                  : undefined
+                highlight.label ? { value: highlight.label, position: 'insideBottom', fill: pal['--text-3'], fontSize: 10.5 } : undefined
               }
             />
           )}
@@ -259,6 +259,7 @@ export function TimeSeriesChart({
             allowDecimals={false}
           />
           <YAxis
+            yAxisId="left"
             width={52}
             tickFormatter={(v: number) => yFmt(v)}
             tick={{ fill: pal['--text-3'], fontSize: 11 }}
@@ -266,14 +267,28 @@ export function TimeSeriesChart({
             tickLine={false}
             allowDecimals={!integerY}
           />
+          {hasRight && (
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              width={40}
+              domain={[0, 'auto']}
+              tickFormatter={(v: number) => yFmtRight(v)}
+              tick={{ fill: pal['--text-3'], fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              allowDecimals={false}
+            />
+          )}
           <Tooltip
             isAnimationActive={false}
             cursor={{ stroke: pal['--text-3'], strokeWidth: 1, strokeDasharray: '3 3' }}
-            content={<ChartTooltip series={series} fmt={fmt} xLabel={(x) => `t = ${fmtClock(x)}`} />}
+            content={<ChartTooltip series={series} fmt={fmt} fmtRight={yFmtRight} xLabel={(x) => `t = ${fmtClock(x)}`} />}
           />
           {series.map((s) => (
             <Line
               key={s.key}
+              yAxisId={s.axis === 'right' ? 'right' : 'left'}
               dataKey={s.key}
               name={s.label}
               stroke={s.color}
@@ -310,6 +325,7 @@ export function useRunSeries() {
         { key: 'p50_ms', label: 'p50', color: pal['--series-1'] },
         { key: 'p95_ms', label: 'p95', color: pal['--series-2'] },
         { key: 'p99_ms', label: 'p99', color: pal['--series-3'] },
+        { key: 'active', label: 'Active VUs', color: pal['--series-muted'], dashed: true, axis: 'right' },
       ] as Series[],
       errors: [{ key: 'errors', label: 'Errors/s', color: pal['--series-red'] }] as Series[],
     }),
@@ -355,7 +371,15 @@ export function RunCharts({
       </ChartCard>
       <div className="grid-2" style={{ gap: 12 }}>
         <ChartCard title="Latency percentiles (ms)" series={s.latency}>
-          <TimeSeriesChart data={data} series={s.latency} fmt={fmtMs} yFmt={yMs} xMax={xMax} highlight={highlight && { from: highlight.from, to: highlight.to }} />
+          <TimeSeriesChart
+            data={data}
+            series={s.latency}
+            fmt={fmtMs}
+            yFmt={yMs}
+            yFmtRight={fmtCompact}
+            xMax={xMax}
+            highlight={highlight && { from: highlight.from, to: highlight.to }}
+          />
         </ChartCard>
         <ChartCard title="Errors per second" series={s.errors}>
           <TimeSeriesChart
@@ -372,17 +396,101 @@ export function RunCharts({
   );
 }
 
-// ---------- load profile preview ----------
+// ---------- latency distribution ----------
 
-export function ProfileChart({
-  points,
-  unit,
-  height = 140,
+function HistTooltip({ active, payload, total }: TooltipProps<number, string> & { total: number }) {
+  if (!active || !payload || payload.length === 0) return null;
+  const row = payload[0]?.payload as HistRow | undefined;
+  if (!row) return null;
+  return (
+    <div className="chart-tooltip">
+      <div className="tt-head">{bucketRange(row)}</div>
+      <div className="tt-row">
+        <span className="text-2">Requests</span>
+        <span className="tt-v">
+          {row.count.toLocaleString()} · {fmtShare(row.count, total)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Latency distribution (log-spaced buckets) with p50/p95/p99 markers. Renders nothing when empty. */
+export function LatencyHistogram({
+  buckets,
+  p50,
+  p95,
+  p99,
+  height = 220,
 }: {
-  points: ProfilePoint[];
-  unit: string;
+  buckets: HistBucket[] | null | undefined;
+  p50?: number;
+  p95?: number;
+  p99?: number;
   height?: number;
 }) {
+  const pal = usePalette();
+  const rows = useMemo(() => histRows(buckets), [buckets]);
+  if (rows.length === 0) return null;
+  const total = rows.reduce((a, r) => a + r.count, 0);
+  const marks = [
+    { key: 'p50', v: p50, color: pal['--series-1'] },
+    { key: 'p95', v: p95, color: pal['--series-2'] },
+    { key: 'p99', v: p99, color: pal['--series-3'] },
+  ].flatMap((m) => {
+    const idx = bucketIndexFor(buckets, m.v ?? NaN);
+    return idx < 0 ? [] : [{ ...m, idx }];
+  });
+  const series: Series[] = marks.map((m) => ({ key: m.key, label: `${m.key} ${fmtMs(m.v)}`, color: m.color, dashed: true }));
+  return (
+    <ChartCard title="Latency distribution" series={series}>
+      <div style={{ height }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={rows} margin={{ top: 14, right: 12, bottom: 0, left: 4 }} barCategoryGap={1}>
+            <CartesianGrid stroke={pal['--grid']} vertical={false} />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickFormatter={(v: number) => fmtEdgeMs(rows[v]?.from_ms ?? NaN)}
+              stroke={pal['--border-strong']}
+              tick={{ fill: pal['--text-3'], fontSize: 10.5 }}
+              tickLine={false}
+              interval="preserveStartEnd"
+              minTickGap={24}
+            />
+            <YAxis
+              width={52}
+              allowDecimals={false}
+              tickFormatter={(v: number) => fmtCompact(v)}
+              tick={{ fill: pal['--text-3'], fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <Tooltip isAnimationActive={false} cursor={{ fill: pal['--grid'], fillOpacity: 0.6 }} content={<HistTooltip total={total} />} />
+            <Bar dataKey="count" fill={pal['--series-1']} fillOpacity={0.85} isAnimationActive={false} radius={[2, 2, 0, 0]} />
+            {marks.map((m) => (
+              <ReferenceLine
+                key={m.key}
+                x={m.idx}
+                stroke={m.color}
+                strokeWidth={1.5}
+                strokeDasharray="4 3"
+                label={{ value: m.key, position: 'top', fill: m.color, fontSize: 10.5 }}
+              />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="hint" style={{ marginTop: 4 }}>
+        Latency in ms (log scale) · each bar is one bucket · markers show the window percentiles
+      </div>
+    </ChartCard>
+  );
+}
+
+// ---------- load profile preview ----------
+
+export function ProfileChart({ points, unit, height = 140 }: { points: ProfilePoint[]; unit: string; height?: number }) {
   const pal = usePalette();
   if (points.length < 2) {
     return (
@@ -604,18 +712,11 @@ export function StackedBarChart({
             tickLine={false}
             minTickGap={16}
           />
-          <YAxis
-            width={40}
-            allowDecimals={false}
-            tick={{ fill: pal['--text-3'], fontSize: 11 }}
-            axisLine={false}
-            tickLine={false}
-          />
+          <YAxis width={40} allowDecimals={false} tick={{ fill: pal['--text-3'], fontSize: 11 }} axisLine={false} tickLine={false} />
           <Tooltip
             isAnimationActive={false}
             cursor={{ fill: pal['--grid'], fillOpacity: 0.6 }}
-            content={
-<ChartTooltip series={series} fmt={(v) => String(v)} headText={xFmt} />}
+            content={<ChartTooltip series={series} fmt={(v) => String(v)} headText={xFmt} />}
           />
           {series.map((s, i) => (
             <Bar
