@@ -284,7 +284,9 @@ say it ran with an override. The suite run page shows live status, requests, RPS
 rate per test, with links to each run's report. A suite run passes only if
 every test passed. A deleted test stays listed and is reported as an error
 when the suite runs. Suite runs that were active when the server stopped
-are marked as error on the next start.
+are marked as error on the next start. Once a suite has two finished runs,
+its page shows a **Trend** card: pass rate and p95 per test over the last
+30 runs (click a point to open that run).
 
 API: `/api/suites` (CRUD), `POST /api/suites/{id}/runs`,
 `GET /api/suite-runs/{id}`, `POST /api/suite-runs/{id}/stop` (see

@@ -168,3 +168,78 @@ export function describeMode(s: Pick<Suite, 'mode' | 'stop_on_failure' | 'gap_ms
   if (s.stop_on_failure) parts.push('stops on first failure');
   return parts.join(' · ');
 }
+
+/** Per-test-case numbers of one suite run in the trend. */
+export interface SuiteTrendCase {
+  p95_ms: number;
+  error_rate: number;
+}
+
+export interface SuiteTrendPoint {
+  id: string;
+  started_at: string;
+  label: string;
+  status: SuiteRun['status'];
+  /**
+   * passed / total items, in 0..1; null if the run has no items. Skipped items
+   * count as not passed (they are only skipped after a failure, so excluding
+   * them would hide it).
+   */
+  passRate: number | null;
+  /** By case key; only items that finished with a summary. */
+  cases: Record<string, SuiteTrendCase>;
+}
+
+export interface SuiteTrendCaseInfo {
+  key: string;
+  test_id: string;
+  /** Latest known test name; '' if the test was deleted. */
+  name: string;
+}
+
+export interface SuiteTrend {
+  /** Finished runs, oldest first. */
+  points: SuiteTrendPoint[];
+  /** Every test case seen in the points, ordered by position in the suite. */
+  cases: SuiteTrendCaseInfo[];
+}
+
+/** Key of a test case within a suite: position + test id (a test may appear twice). */
+export function caseKey(index: number, testId: string): string {
+  return `${index}:${testId}`;
+}
+
+/**
+ * Trend over suite runs (given newest first, as the API returns them): active
+ * runs are skipped and the rest are returned oldest first.
+ */
+export function suiteTrend(runs: readonly SuiteRun[]): SuiteTrend {
+  const points: SuiteTrendPoint[] = [];
+  const info = new Map<string, SuiteTrendCaseInfo>();
+  for (const r of runs) {
+    if (isActive(r)) continue;
+    const cases: Record<string, SuiteTrendCase> = {};
+    r.items.forEach((it, i) => {
+      const key = caseKey(i, it.test_id);
+      // Runs come newest first, so the first name seen is the latest.
+      const known = info.get(key);
+      if (!known) info.set(key, { key, test_id: it.test_id, name: it.test_name });
+      else if (!known.name && it.test_name) known.name = it.test_name;
+      if (it.summary) cases[key] = { p95_ms: it.summary.p95_ms, error_rate: it.summary.error_rate };
+    });
+    const total = r.items.length;
+    const passed = r.items.filter((it) => it.status === 'passed').length;
+    points.push({
+      id: r.id,
+      started_at: r.started_at,
+      label: r.label,
+      status: r.status,
+      passRate: total > 0 ? passed / total : null,
+      cases,
+    });
+  }
+  points.reverse();
+  const order = (k: string) => Number(k.slice(0, k.indexOf(':')));
+  const cases = [...info.values()].sort((a, b) => order(a.key) - order(b.key));
+  return { points, cases };
+}

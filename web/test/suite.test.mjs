@@ -1,7 +1,7 @@
 // Tests for the test-suite helpers (src/lib/suite.ts).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { describeMode, formToRequest, itemDurationS, itemTone, moveItem, newFormItem, progress, suiteToForm } from '../src/lib/suite.ts';
+import { describeMode, formToRequest, itemDurationS, itemTone, moveItem, newFormItem, progress, suiteToForm, suiteTrend } from '../src/lib/suite.ts';
 
 const keep = { mode: 'keep', unit: 'users', target: '10', rampUp: '30s', hold: '5m', rampDown: '0s' };
 
@@ -76,4 +76,37 @@ test('describeMode', () => {
   assert.equal(describeMode({ mode: 'parallel', stop_on_failure: true, gap_ms: 1000 }), 'All tests at once');
   assert.equal(describeMode({ mode: 'sequential', stop_on_failure: true, gap_ms: 30000 }), 'One after another · 30 s pause · stops on first failure');
   assert.equal(describeMode({ mode: 'sequential', stop_on_failure: false, gap_ms: 0 }), 'One after another');
+});
+
+const sum = (p95, err = 0) => ({ requests: 10, errors: 0, dropped: 0, error_rate: err, rps: 1, mean_ms: 1, p50_ms: 1, p90_ms: 1, p95_ms: p95, p99_ms: 1, max_ms: 1 });
+const srun = (id, status, items, started = '2025-01-01T00:00:00Z', label = '') => ({ id, suite_id: 's', suite_name: 'n', status, started_at: started, label, items });
+
+test('suiteTrend orders oldest first, skips active runs and computes pass rate', () => {
+  const runs = [
+    srun('r3', 'running', [{ test_id: 'a', test_name: 'A', status: 'running' }], '2025-01-03T00:00:00Z'),
+    // a passed, b skipped after a failure elsewhere: skipped counts as not passed.
+    srun('r2', 'failed', [{ test_id: 'a', test_name: 'A', status: 'passed', summary: sum(200, 0.1) }, { test_id: 'b', test_name: 'B', status: 'skipped' }],
+      '2025-01-02T00:00:00Z', 'v2'),
+    srun('r1', 'passed', [{ test_id: 'a', test_name: 'A', status: 'passed', summary: sum(100) }, { test_id: 'b', test_name: 'B', status: 'passed', summary: sum(50) }]),
+  ];
+  const t = suiteTrend(runs);
+  assert.deepEqual(t.points.map((p) => p.id), ['r1', 'r2']);
+  assert.deepEqual(t.points.map((p) => p.passRate), [1, 0.5]);
+  assert.equal(t.points[1].label, 'v2');
+  assert.deepEqual(t.points[1].cases, { '0:a': { p95_ms: 200, error_rate: 0.1 } });
+  assert.deepEqual(t.cases.map((c) => c.key), ['0:a', '1:b']);
+  assert.deepEqual(suiteTrend([]), { points: [], cases: [] });
+});
+
+test('suiteTrend keeps duplicate tests apart, handles missing summaries and deleted tests', () => {
+  const runs = [
+    srun('r2', 'passed', [{ test_id: 'a', test_name: 'A', status: 'passed', summary: sum(20) }, { test_id: 'a', test_name: 'A', status: 'passed', summary: sum(90) }], '2025-01-02T00:00:00Z'),
+    srun('r1', 'error', [{ test_id: 'a', test_name: '', status: 'error' }, { test_id: 'a', test_name: '', status: 'error' }, { test_id: 'x', test_name: '', status: 'error' }]),
+    srun('r0', 'stopped', []),
+  ];
+  const t = suiteTrend(runs);
+  assert.deepEqual(t.points.map((p) => p.passRate), [null, 0, 1]);
+  assert.deepEqual(t.points[2].cases, { '0:a': { p95_ms: 20, error_rate: 0 }, '1:a': { p95_ms: 90, error_rate: 0 } });
+  assert.deepEqual(t.points[1].cases, {});
+  assert.deepEqual(t.cases.map((c) => [c.key, c.name]), [['0:a', 'A'], ['1:a', 'A'], ['2:x', '']]);
 });
