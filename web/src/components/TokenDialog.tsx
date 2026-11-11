@@ -114,20 +114,20 @@ export function TokenDialog({ onClose, onCreated }: { onClose: () => void; onCre
             Store the secret in a password manager or a CI secret. If you lose it, revoke the token and create a new one.
           </div>
           <div className="field">
-            <label>
+            <div className="label">
               Secret for <b>{created.token.name}</b> ({SCOPE_INFO[created.token.scope].label.toLowerCase()})
-            </label>
+            </div>
             <CopyBox text={created.secret} label="Token secret" />
           </div>
           <div className="field">
-            <label>MCP server (AI agents: Kiro, Claude Code)</label>
+            <div className="label">MCP server (AI agents: Kiro, Claude Code)</div>
             <CopyBox text={mcpSnippet(origin)} label="MCP command" />
             <div className="hint">
               Set the <code>GOLOAD_TOKEN</code> environment variable to the secret above.
             </div>
           </div>
           <div className="field">
-            <label>CI pipeline</label>
+            <div className="label">CI pipeline</div>
             <CopyBox text={ciSnippet(origin)} label="CI snippet" />
             <div className="hint">
               Save the secret as a CI secret named <code>GOLOAD_TOKEN</code>.
@@ -168,7 +168,6 @@ export function TokenDialog({ onClose, onCreated }: { onClose: () => void; onCre
             placeholder="e.g. kiro-hakan or ci-main"
             value={form.name}
             onChange={(e) => set({ name: e.target.value })}
-            autoFocus
           />
           {errorsFor(fe, 'name').map((m, i) => (
             <div key={i} className="field-err">
@@ -179,16 +178,22 @@ export function TokenDialog({ onClose, onCreated }: { onClose: () => void; onCre
         </div>
 
         <div className="field">
-          <label id="tok-scope-l">Access</label>
+          <div className="label" id="tok-scope-l">
+            Access
+          </div>
           <div className="stack" style={{ gap: 8 }} role="radiogroup" aria-labelledby="tok-scope-l">
             {SCOPES.map((s) => (
-              <label key={s} className={`scope-card ${form.scope === s ? 'on' : ''}`}>
-                <input type="radio" name="tok-scope" checked={form.scope === s} onChange={() => set({ scope: s })} />
-                <span>
-                  <b>{SCOPE_INFO[s].label}</b>
-                  <span className="small-text text-2" style={{ display: 'block' }}>
-                    {SCOPE_INFO[s].description}
-                  </span>
+              <label key={s} htmlFor={`tok-scope-${s}`} className={`scope-card ${form.scope === s ? 'on' : ''}`}>
+                <input
+                  id={`tok-scope-${s}`}
+                  type="radio"
+                  name="tok-scope"
+                  checked={form.scope === s}
+                  onChange={() => set({ scope: s })}
+                />{' '}
+                {SCOPE_INFO[s].label}
+                <span className="small-text text-2" style={{ display: 'block' }}>
+                  {SCOPE_INFO[s].description}
                 </span>
               </label>
             ))}

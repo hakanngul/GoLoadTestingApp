@@ -3669,3 +3669,13 @@ tr.focus-row td {
   color: var(--text-2);
   white-space: nowrap;
 }
+
+/* Scope choices in the New API token dialog */
+.scope-card {
+  display: block;
+  font-weight: 600;
+  cursor: pointer;
+}
+.scope-card .small-text {
+  font-weight: 400;
+}

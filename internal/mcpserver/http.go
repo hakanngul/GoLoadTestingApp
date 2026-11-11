@@ -172,7 +172,9 @@ func bearerToken(r *http.Request) string {
 // InProcessClient returns an apiclient.Client that sends its requests to
 // api directly instead of over the network, authenticated with token.
 func InProcessClient(api http.Handler, token string) *apiclient.Client {
-	c := apiclient.New("http://goload.inprocess", token)
+	// The URL never reaches the network: inProcessTransport hands every
+	// request to api directly.
+	c := apiclient.New("https://goload.inprocess", token)
 	c.HTTP = &http.Client{Transport: &inProcessTransport{api: api}}
 	return c
 }
