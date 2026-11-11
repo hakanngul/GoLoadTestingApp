@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/hakanngul/GoLoadTestingApp/internal/apiclient"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 )
 
@@ -125,117 +125,10 @@ func parseRemoteOpts(args []string, stderr io.Writer) (*remoteOpts, int) {
 	}, exitOK
 }
 
-// remoteAPIError is a non-2xx answer (or a transport failure, Status 0).
-type remoteAPIError struct {
-	Status  int
-	Message string
-	Details []string
-}
-
-func (e *remoteAPIError) Error() string {
-	if e.Status == 0 {
-		return e.Message
-	}
-	return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message)
-}
-
-// transient reports whether retrying the same GET may help.
-func (e *remoteAPIError) transient() bool {
-	switch e.Status {
-	case 0, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, http.StatusTooManyRequests:
-		return true
-	}
-	return false
-}
-
-type remoteClient struct {
-	base  string
-	token string
-	http  *http.Client
-}
-
-// do performs one request. GETs are retried on transient errors.
-func (c *remoteClient) do(ctx context.Context, method, path string, in, out any) error {
-	var body []byte
-	if in != nil {
-		var err error
-		if body, err = json.Marshal(in); err != nil {
-			return &remoteAPIError{Message: err.Error()}
-		}
-	}
-	attempts := 1
-	if method == http.MethodGet {
-		attempts += remoteRetries
-	}
-	var err error
-	for i := 0; i < attempts; i++ {
-		if i > 0 {
-			select {
-			case <-ctx.Done():
-				return err
-			case <-time.After(time.Duration(i) * remoteRetryBackoff):
-			}
-		}
-		err = c.once(ctx, method, path, body, out)
-		var ae *remoteAPIError
-		if err == nil || ctx.Err() != nil || !errors.As(err, &ae) || !ae.transient() {
-			return err
-		}
-	}
-	return err
-}
-
-func (c *remoteClient) once(ctx context.Context, method, path string, body []byte, out any) error {
-	var rd io.Reader
-	if body != nil {
-		rd = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
-	if err != nil {
-		return &remoteAPIError{Message: err.Error()}
-	}
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		// *url.Error carries method and URL only, never headers.
-		return &remoteAPIError{Message: err.Error()}
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
-	if err != nil {
-		return &remoteAPIError{Message: "reading response: " + err.Error()}
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		ae := &remoteAPIError{Status: resp.StatusCode}
-		var apiErr model.APIError
-		if json.Unmarshal(data, &apiErr) == nil && apiErr.Error != "" {
-			ae.Message, ae.Details = apiErr.Error, apiErr.Details
-		} else {
-			ae.Message = http.StatusText(resp.StatusCode)
-			if s := strings.TrimSpace(string(data)); s != "" && len(s) < 300 {
-				ae.Message += ": " + s
-			}
-		}
-		return ae
-	}
-	if out != nil && len(data) > 0 {
-		if err := json.Unmarshal(data, out); err != nil {
-			return &remoteAPIError{Message: "invalid JSON from server: " + err.Error()}
-		}
-	}
-	return nil
-}
-
 // printAPIError prints an error with its details and hints.
 func printAPIError(w io.Writer, prefix string, err error) {
 	fmt.Fprintf(w, "%s: %v\n", prefix, err)
-	var ae *remoteAPIError
+	var ae *apiclient.APIError
 	if errors.As(err, &ae) {
 		for _, d := range ae.Details {
 			fmt.Fprintf(w, "  - %s\n", d)
@@ -244,63 +137,6 @@ func printAPIError(w io.Writer, prefix string, err error) {
 			fmt.Fprintln(w, "  hint: set GOLOAD_TOKEN (or --token) to the server's API token")
 		}
 	}
-}
-
-// nameID is a test or suite as seen by name resolution.
-type nameID struct{ ID, Name string }
-
-// resolveRef finds ref among items: an exact id wins, then an exact name.
-func resolveRef(kind, ref string, items []nameID) (nameID, error) {
-	for _, it := range items {
-		if it.ID == ref {
-			return it, nil
-		}
-	}
-	var hits []nameID
-	for _, it := range items {
-		if it.Name == ref {
-			hits = append(hits, it)
-		}
-	}
-	switch len(hits) {
-	case 1:
-		return hits[0], nil
-	case 0:
-		var near, all []string
-		lref := strings.ToLower(ref)
-		for _, it := range items {
-			all = append(all, it.Name)
-			ln := strings.ToLower(it.Name)
-			if strings.Contains(ln, lref) || strings.Contains(lref, ln) {
-				near = append(near, it.Name)
-			}
-		}
-		msg := fmt.Sprintf("no %s named or with id %q", kind, ref)
-		if len(near) == 0 {
-			near = all
-		}
-		if len(near) > 0 {
-			if len(near) > 8 {
-				near = near[:8]
-			}
-			msg += "; did you mean: " + strings.Join(quoteAll(near), ", ")
-		}
-		return nameID{}, errors.New(msg)
-	default:
-		var ids []string
-		for _, h := range hits {
-			ids = append(ids, h.ID)
-		}
-		return nameID{}, fmt.Errorf("%d %ss are named %q; use an id instead: %s", len(hits), kind, ref, strings.Join(ids, ", "))
-	}
-}
-
-func quoteAll(ss []string) []string {
-	out := make([]string, len(ss))
-	for i, s := range ss {
-		out[i] = fmt.Sprintf("%q", s)
-	}
-	return out
 }
 
 // remoteResult is the final state in one shape for suites and single runs.
@@ -394,7 +230,8 @@ func remoteRun(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if o == nil {
 		return code
 	}
-	c := &remoteClient{base: o.server, token: o.token, http: &http.Client{Timeout: remoteRequestTimeout}}
+	c := &apiclient.Client{BaseURL: o.server, Token: o.token, HTTP: &http.Client{Timeout: remoteRequestTimeout},
+		Retries: remoteRetries, Backoff: remoteRetryBackoff}
 
 	// --- resolve ---
 	kind, listPath := "test", "/api/tests"
@@ -402,27 +239,27 @@ func remoteRun(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if o.suite != "" {
 		kind, listPath, ref = "suite", "/api/suites", o.suite
 	}
-	var items []nameID
+	var items []apiclient.Ref
 	if kind == "test" {
 		var ts []model.Test
-		if err := c.do(ctx, http.MethodGet, listPath, nil, &ts); err != nil {
+		if err := c.Do(ctx, http.MethodGet, listPath, nil, &ts); err != nil {
 			printAPIError(stderr, "remote run: listing tests", err)
 			return exitRun
 		}
 		for _, t := range ts {
-			items = append(items, nameID{t.ID, t.Name})
+			items = append(items, apiclient.Ref{ID: t.ID, Name: t.Name})
 		}
 	} else {
 		var ss []model.Suite
-		if err := c.do(ctx, http.MethodGet, listPath, nil, &ss); err != nil {
+		if err := c.Do(ctx, http.MethodGet, listPath, nil, &ss); err != nil {
 			printAPIError(stderr, "remote run: listing suites", err)
 			return exitRun
 		}
 		for _, s := range ss {
-			items = append(items, nameID{s.ID, s.Name})
+			items = append(items, apiclient.Ref{ID: s.ID, Name: s.Name})
 		}
 	}
-	target, err := resolveRef(kind, ref, items)
+	target, err := apiclient.ResolveRef(kind, ref, items)
 	if err != nil {
 		fmt.Fprintf(stderr, "remote run: %v\n", err)
 		return exitUsage
@@ -438,7 +275,7 @@ func remoteRun(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if kind == "test" {
 		var run model.Run
 		req := model.StartRunRequest{Workers: o.workers, Label: o.label}
-		if err := c.do(ctx, http.MethodPost, "/api/tests/"+url.PathEscape(target.ID)+"/runs", req, &run); err != nil {
+		if err := c.Do(ctx, http.MethodPost, "/api/tests/"+url.PathEscape(target.ID)+"/runs", req, &run); err != nil {
 			printAPIError(stderr, fmt.Sprintf("remote run: server rejected starting test %q", target.Name), err)
 			return exitRun
 		}
@@ -448,7 +285,7 @@ func remoteRun(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	} else {
 		var sr model.SuiteRun
 		req := model.StartSuiteRequest{Label: o.label}
-		if err := c.do(ctx, http.MethodPost, "/api/suites/"+url.PathEscape(target.ID)+"/runs", req, &sr); err != nil {
+		if err := c.Do(ctx, http.MethodPost, "/api/suites/"+url.PathEscape(target.ID)+"/runs", req, &sr); err != nil {
 			printAPIError(stderr, fmt.Sprintf("remote run: server rejected starting suite %q", target.Name), err)
 			return exitRun
 		}
@@ -461,13 +298,13 @@ func remoteRun(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	fetch := func(ctx context.Context) (remoteResult, error) {
 		if kind == "test" {
 			var r model.Run
-			if err := c.do(ctx, http.MethodGet, statPath+url.PathEscape(id), nil, &r); err != nil {
+			if err := c.Do(ctx, http.MethodGet, statPath+url.PathEscape(id), nil, &r); err != nil {
 				return remoteResult{}, err
 			}
 			return resultFromRun(o.server, r), nil
 		}
 		var s model.SuiteRun
-		if err := c.do(ctx, http.MethodGet, statPath+url.PathEscape(id), nil, &s); err != nil {
+		if err := c.Do(ctx, http.MethodGet, statPath+url.PathEscape(id), nil, &s); err != nil {
 			return remoteResult{}, err
 		}
 		return resultFromSuiteRun(o.server, s), nil
@@ -497,8 +334,8 @@ poll:
 		case tctx.Err() != nil:
 			// handled below
 		default:
-			var ae *remoteAPIError
-			if errors.As(err, &ae) && !ae.transient() {
+			var ae *apiclient.APIError
+			if errors.As(err, &ae) && !ae.Transient() {
 				pollErr = err
 				break poll
 			}
@@ -533,7 +370,7 @@ poll:
 		}
 		if o.stopOnCancel {
 			sctx, scancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := c.do(sctx, http.MethodPost, stopPath, nil, nil); err != nil {
+			if err := c.Do(sctx, http.MethodPost, stopPath, nil, nil); err != nil {
 				printAPIError(stderr, "remote run: could not stop the remote run", err)
 			} else {
 				fmt.Fprintf(stderr, "remote run: stop requested for %s\n", res.URL)
@@ -560,7 +397,7 @@ poll:
 				continue
 			}
 			var r model.Run
-			if err := c.do(fctx, http.MethodGet, "/api/runs/"+url.PathEscape(it.RunID), nil, &r); err == nil {
+			if err := c.Do(fctx, http.MethodGet, "/api/runs/"+url.PathEscape(it.RunID), nil, &r); err == nil {
 				res.Items[i].Thresholds = r.Thresholds
 			}
 		}
