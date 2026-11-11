@@ -5,6 +5,7 @@
 //	goloadtest try [-v] [-json] scenario.yaml
 //	goloadtest serve [flags]
 //	goloadtest worker -master host:9090
+//	goloadtest remote run --server URL (--test NAME|ID | --suite NAME|ID) [flags]
 //	goloadtest prune -older-than 30d [-db ...] [-dry-run]
 //	goloadtest version
 //
@@ -48,6 +49,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdWorker(args[1:], stdout, stderr)
 	case "prune":
 		return cmdPrune(args[1:], stdout, stderr)
+	case "remote":
+		return cmdRemote(args[1:], stdout, stderr)
 	case "validate":
 		return cmdValidate(args[1:], stdout, stderr)
 	case "try":
@@ -73,8 +76,9 @@ func usage(w io.Writer) {
   goloadtest serve [flags]               start the master (API + UI)
   goloadtest worker -master host:9090    run a load-generating worker
   goloadtest prune -older-than 30d       delete old finished runs (-dry-run to list)
+  goloadtest remote run --server URL ... run a test/suite on a server, gate CI on the result
   goloadtest version                     print version
 
-Run 'goloadtest run -h' for run flags.
+Run 'goloadtest run -h' for run flags, 'goloadtest remote run -h' for remote flags.
 `)
 }
