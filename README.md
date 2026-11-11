@@ -324,7 +324,7 @@ export GOLOAD_TOKEN=...
 claude mcp add goload -e GOLOAD_TOKEN="$GOLOAD_TOKEN" -- goloadtest mcp --server https://goload.internal.example
 ```
 
-Use `--read-only` to hide every tool that changes anything. Setup for each client, security notes and the tool list: [`docs/mcp.md`](docs/mcp.md); config examples in [`examples/mcp/`](examples/mcp/).
+Use `--read-only` to hide every tool that changes anything. To let remote agents connect by URL instead, start the server with `serve -mcp` (endpoint `/mcp`; the caller's bearer token is forwarded to the API). Setup for each client, security notes and the tool list: [`docs/mcp.md`](docs/mcp.md); config examples in [`examples/mcp/`](examples/mcp/).
 
 ## Notifications
 
