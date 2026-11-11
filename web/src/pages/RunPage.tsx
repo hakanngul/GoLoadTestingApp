@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, download, errorText, exportUrls, subscribeRun } from '../api/client';
 import { isFinished, type Comparison, type LiveStats, type MetricPoint, type Run, type Summary } from '../api/types';
-import { RunCharts } from '../components/charts';
+import { LatencyHistogram, RunCharts } from '../components/charts';
 import { FailuresTable, LiveStatsPanel } from '../components/livestats';
 import { BaselineBadge, DeltaText, Menu, MetricDeltaTable, OverallBadge, RunLabel, WindowControl } from '../components/report';
 import { ConfirmDialog, ErrorAlert, Icon, Kpi, Loading, Modal, ScheduledBadge, StatusBadge } from '../components/ui';
@@ -647,6 +647,7 @@ export function ResultView({ run: initialRun }: { run: Run }) {
         <StepTable summary={s} title={hasResults ? winText : undefined} />
 
         {metrics.error ? <ErrorAlert error={metrics.error} title="Metrics unavailable" /> : null}
+        {rep && <LatencyHistogram buckets={rep.histogram} p50={rep.summary.p50_ms} p95={rep.summary.p95_ms} p99={rep.summary.p99_ms} />}
         <RunCharts
           points={metrics.data ?? []}
           targetUnit={unit}

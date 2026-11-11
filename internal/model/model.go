@@ -334,6 +334,17 @@ type RunReport struct {
 	Summary    Summary           `json:"summary"`            // over Window (incl. by_step)
 	Thresholds []ThresholdResult `json:"thresholds"`         // re-evaluated over Window
 	Baseline   *Comparison       `json:"baseline,omitempty"` // vs the test's baseline run, same window kind
+	// Histogram is the latency distribution of Window (all steps), from the
+	// merged HDR histograms; omitted when no snapshots were available.
+	Histogram []HistBucket `json:"histogram,omitempty"`
+}
+
+// HistBucket is one bucket of a latency distribution: Count requests took
+// [FromMs, ToMs) milliseconds. Buckets are log-spaced and ordered.
+type HistBucket struct {
+	FromMs float64 `json:"from_ms"`
+	ToMs   float64 `json:"to_ms"`
+	Count  int64   `json:"count"`
 }
 
 // Verdict classifies a metric change between a reference and a candidate.
