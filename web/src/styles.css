@@ -3661,3 +3661,11 @@ tr.focus-row td {
   border: 1px solid currentColor;
   white-space: nowrap;
 }
+
+/* "by kiro-hakan (token)" under a run's test name */
+.started-by {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}

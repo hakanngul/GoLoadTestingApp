@@ -121,7 +121,7 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
       </aside>
       <main className="main">
         {me?.scope === 'read' && (
-          <div className="readonly-banner no-print" role="status">
+          <div className="alert info readonly-banner no-print" role="status" style={{ marginBottom: 16 }}>
             <b>Read-only access.</b> You can view everything, but not start runs or change anything.
           </div>
         )}

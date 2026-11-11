@@ -115,6 +115,19 @@ func runMCP(ctx context.Context, o *mcpOpts, t mcp.Transport, stderr io.Writer) 
 		log.Warn("GoLoad server is not reachable; tools will report errors until it is", "server", o.server, "error", err.Error())
 	} else {
 		log.Info("connected to GoLoad server", "server", o.server, "version", health.Version)
+		// A read-scoped token cannot change anything: hide the mutating
+		// tools instead of letting every call fail with 403.
+		var me struct {
+			Name  string `json:"name"`
+			Scope string `json:"scope"`
+		}
+		if err := hc.Do(hctx, http.MethodGet, "/api/me", nil, &me); err == nil {
+			log.Info("authenticated", "as", me.Name, "scope", me.Scope)
+			if me.Scope == "read" && !o.readOnly {
+				o.readOnly = true
+				log.Info("token has read scope: serving read-only tools")
+			}
+		}
 	}
 	cancel()
 

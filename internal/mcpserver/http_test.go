@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -196,5 +197,72 @@ func TestHTTPReadOnlyHidesMutatingTools(t *testing.T) {
 		if tools[n] {
 			t.Errorf("mutating tool %s visible in read-only mode", n)
 		}
+	}
+}
+
+// createToken makes a scoped API token through the API with the master token.
+func (e *httpEnv) createToken(t *testing.T, master, name, scope string) string {
+	t.Helper()
+	body := strings.NewReader(`{"name":"` + name + `","scope":"` + scope + `"}`)
+	req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/api/tokens", body)
+	req.Header.Set("Authorization", "Bearer "+master)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil || res.StatusCode != http.StatusCreated {
+		t.Fatalf("create token: %d %v", res.StatusCode, err)
+	}
+	return out.Secret
+}
+
+func TestHTTPReadScopedTokenSeesReadOnlyTools(t *testing.T) {
+	e := newHTTPEnv(t, "tok-1")
+	read := e.createToken(t, "tok-1", "viewer", "read")
+	run := e.createToken(t, "tok-1", "agent", "run")
+	if tools := toolSet(t, e.connect(t, read)); tools["start_run"] || tools["create_test"] || !tools["list_tests"] {
+		t.Errorf("read token tools = %v", tools)
+	}
+	if tools := toolSet(t, e.connect(t, run)); !tools["start_run"] {
+		t.Errorf("run token lacks start_run: %v", tools)
+	}
+}
+
+func TestHTTPForbiddenMessageAndLinks(t *testing.T) {
+	e := newHTTPEnv(t, "tok-1")
+	run := e.createToken(t, "tok-1", "agent", "run")
+	cs := e.connect(t, run)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_test", Arguments: map[string]any{
+		"name": "x", "yaml": "name: x\ntarget: {base_url: http://127.0.0.1:1}\nload: {stages: [{duration: 1s, target: 1}]}\nsteps: [{path: /}]\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	txt := textOf(res)
+	if !res.IsError || !strings.Contains(txt, "not allowed") || strings.Contains(txt, "GOLOAD_TOKEN") {
+		t.Errorf("403 message = %q", txt)
+	}
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_server_info", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if txt := textOf(res); !strings.Contains(txt, e.srv.URL) || strings.Contains(txt, "inprocess") {
+		t.Errorf("server_info should link to the request's host: %q", txt)
+	}
+}
+
+func TestRequestBaseURL(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "http://10.0.0.5:8080/mcp", nil)
+	if got := requestBaseURL(r); got != "http://10.0.0.5:8080" {
+		t.Errorf("plain = %q", got)
+	}
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r.Header.Set("X-Forwarded-Host", "goload.internal.example, proxy")
+	if got := requestBaseURL(r); got != "https://goload.internal.example" {
+		t.Errorf("forwarded = %q", got)
 	}
 }

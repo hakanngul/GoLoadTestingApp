@@ -777,7 +777,7 @@ func (h *handlers) regSchedulesAndInfo(s *mcp.Server) {
 		kindRead, false,
 		func(ctx context.Context, _ serverInfoIn) (serverInfoOut, string, error) {
 			out := serverInfoOut{
-				ServerURL: h.client.BaseURL, MCPVersion: h.opts.Version,
+				ServerURL: h.publicBase(), MCPVersion: h.opts.Version,
 				Limits: MCPLimits{ReadOnly: h.opts.ReadOnly, MaxUsers: h.caps.maxUsers, MaxOpenRate: h.caps.maxRate(),
 					MaxDurationS: h.caps.maxDuration.Seconds(), StartedRunsTag: runLabel("")},
 			}

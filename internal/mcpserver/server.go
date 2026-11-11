@@ -33,6 +33,9 @@ type Options struct {
 	Version string
 	// ReadOnly hides every mutating tool.
 	ReadOnly bool
+	// PublicURL is the server URL used in links returned to the agent
+	// (runs, reports). Empty = Client.BaseURL.
+	PublicURL string
 	// MaxUsers caps the virtual users of runs started via MCP (closed
 	// model; open-model tests are capped at 10x this many iterations per
 	// second). 0 = DefaultMaxUsers (50).
@@ -146,8 +149,10 @@ func (h *handlers) apiErr(what string, err error) error {
 	switch {
 	case ae.Status == 0:
 		fmt.Fprintf(&b, "cannot reach the GoLoad server at %s (%s). Check the server URL and that the VPN is connected.", h.client.BaseURL, ae.Message)
-	case ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden:
-		fmt.Fprintf(&b, "%v. The server requires a token: ask the user to set GOLOAD_TOKEN for the MCP server.", ae)
+	case ae.Status == http.StatusUnauthorized:
+		fmt.Fprintf(&b, "%v. The server needs a valid token: ask the user to set GOLOAD_TOKEN (or the Authorization header) for the MCP server; the token may also have expired or been revoked.", ae)
+	case ae.Status == http.StatusForbidden:
+		fmt.Fprintf(&b, "%v. The user's token is not allowed to do this. Tell the user which permission is needed; an admin can create a token with that scope under API tokens.", ae)
 	default:
 		b.WriteString(ae.Error())
 	}

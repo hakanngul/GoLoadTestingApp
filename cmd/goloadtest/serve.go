@@ -214,7 +214,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		mcpHandler := mcpserver.HTTPHandler(apiHandler, mcpserver.HTTPOptions{
 			Version: version, ReadOnly: *mcpReadOnly, MaxUsers: *mcpMaxUsers, MaxDuration: *mcpMaxDuration,
 			Guide: mcpguide.Guide(), CreateTestPrompt: mcpguide.CreateTestPrompt,
-			AuthRequired: *token != "", Logger: log,
+			AuthRequired: *token != "", Logger: log, PublicURL: *publicURL,
 		})
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == mcpserver.HTTPPath {

@@ -311,8 +311,18 @@ func isRuneStart(b byte) bool { return b&0xC0 != 0x80 }
 
 // url joins a UI path to the server URL.
 func (h *handlers) url(path string) string {
-	if h.client.BaseURL == "" {
+	base := h.publicBase()
+	if base == "" {
 		return ""
 	}
-	return strings.TrimRight(h.client.BaseURL, "/") + path
+	return base + path
+}
+
+// publicBase is the server URL the user can open: Options.PublicURL, else
+// the API client's base URL.
+func (h *handlers) publicBase() string {
+	if u := strings.TrimSpace(h.opts.PublicURL); u != "" {
+		return strings.TrimRight(u, "/")
+	}
+	return strings.TrimRight(h.client.BaseURL, "/")
 }
