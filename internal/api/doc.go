@@ -96,6 +96,21 @@
 //	GET    /api/suite-runs/{id}              -> model.SuiteRun (poll while running)
 //	POST   /api/suite-runs/{id}/stop         -> 202 (409 not active)
 //
+//	Notifications (channels live in the store's store.NotificationStore; 503 when the store does not
+//	implement it). A channel URL is a secret: responses carry only "url_masked"
+//	(scheme://host/…last4) and never "url"; URLs are never logged:
+//	GET    /api/notifications                -> []model.NotificationView (oldest first)
+//	POST   /api/notifications                model.NotificationRequest -> 201 model.NotificationView
+//	                                         (400 "invalid notification channel", Details = "field: message":
+//	                                         name required <=100, kind slack|webhook, url required and https
+//	                                         (http only for localhost/127.0.0.1/::1), events non-empty subset of
+//	                                         run_finished|suite_finished; enabled defaults to true)
+//	PUT    /api/notifications/{id}           model.NotificationRequest -> model.NotificationView (empty url
+//	                                         keeps the stored one; enabled omitted keeps the stored value)
+//	DELETE /api/notifications/{id}           -> 204
+//	POST   /api/notifications/{id}/test      -> 200 {"ok": true} or {"ok": false, "error": "..."} after a
+//	                                         synchronous test message (503 without a Notifier)
+//
 //	GET    /*                              embedded UI (web/dist), SPA fallback to index.html
 //
 // Scenario validation for POST/PUT/validate uses scenario.Parse; the data

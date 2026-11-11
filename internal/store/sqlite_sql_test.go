@@ -25,6 +25,8 @@ func TestSQLiteQueryLiteralsMatchFragments(t *testing.T) {
 		{"GetSchedule", sqliteGetScheduleSQL, sqliteScheduleCols},
 		{"ListSchedules", sqliteListSchedulesSQL, sqliteScheduleCols},
 		{"ListTestSchedules", sqliteListTestSchedulesSQL, sqliteScheduleCols},
+		{"GetNotification", sqliteGetNotificationSQL, sqliteNotificationCols},
+		{"ListNotifications", sqliteListNotificationsSQL, sqliteNotificationCols},
 		{"GetSuite", sqliteGetSuiteSQL, sqliteSuiteCols},
 		{"ListSuites", sqliteListSuitesSQL, sqliteSuiteCols},
 		{"GetSuiteRun", sqliteGetSuiteRunSQL, sqliteSuiteRunCols},

@@ -548,3 +548,41 @@ export interface SuiteRun {
   items: SuiteRunItem[];
   error?: string;
 }
+
+// ---------- notifications ----------
+
+export type NotificationKind = 'slack' | 'webhook';
+export type NotificationEvent = 'run_finished' | 'suite_finished';
+
+/**
+ * A notification channel as returned by the API. The webhook URL is a
+ * secret and is never sent back: only a masked form is available.
+ */
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  kind: NotificationKind;
+  /** e.g. `https://hooks.slack.com/…a1b2` */
+  url_masked: string;
+  events: NotificationEvent[];
+  only_failures: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationRequest {
+  name: string;
+  kind: NotificationKind;
+  /** Empty on update keeps the stored URL. */
+  url: string;
+  events: NotificationEvent[];
+  only_failures: boolean;
+  enabled: boolean;
+}
+
+/** Result of POST /api/notifications/{id}/test. */
+export interface NotificationTestResult {
+  ok: boolean;
+  error?: string;
+}

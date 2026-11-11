@@ -100,6 +100,7 @@ loop:
 	final := m.finalRun(ar, sc, metrics.Summarize(col.Cumulative()), runErr, peakCPU)
 	m.storeErrorGroups(runID, ar.groups)
 	m.updateRun(final)
+	m.runFinished(final)
 	ar.finish(final)
 	m.remove(runID)
 }
@@ -296,6 +297,14 @@ func (m *Manager) flushSamples(runID string, s *errorSampler) {
 	defer cancel()
 	if err := m.store.AppendErrorSamples(ctx, runID, batch); err != nil {
 		m.log.Error("runner: store error samples", "run", runID, "count", len(batch), "err", err)
+	}
+}
+
+// runFinished calls Options.OnFinish, if set, with a run whose final status
+// has just been persisted.
+func (m *Manager) runFinished(r model.Run) {
+	if m.onFinish != nil {
+		m.onFinish(r)
 	}
 }
 

@@ -699,3 +699,70 @@ type SuiteRun struct {
 	Items         []SuiteRunItem `json:"items"`
 	Error         string         `json:"error,omitempty"`
 }
+
+// ---- Notifications ---------------------------------------------------------
+
+// Notification channel kinds.
+const (
+	// NotifySlack posts {"text": ...} to a Slack incoming webhook.
+	NotifySlack = "slack"
+	// NotifyWebhook posts a JSON event document to any HTTP endpoint.
+	NotifyWebhook = "webhook"
+)
+
+// Notification events a channel can subscribe to.
+const (
+	// EventRunFinished fires when a run reaches a final status (passed,
+	// failed, stopped or error), including runs started by a suite.
+	EventRunFinished = "run_finished"
+	// EventSuiteFinished fires when a suite run reaches a final status.
+	EventSuiteFinished = "suite_finished"
+)
+
+// NotificationChannel is a destination for finish notifications. URL is a
+// secret (a Slack webhook URL grants posting rights): it is only held by
+// the stores and the notifier. API responses use NotificationView, which
+// carries a masked form instead.
+type NotificationChannel struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Kind is NotifySlack or NotifyWebhook.
+	Kind string `json:"kind"`
+	URL  string `json:"url"`
+	// Events lists the subscribed events (EventRunFinished,
+	// EventSuiteFinished).
+	Events []string `json:"events"`
+	// OnlyFailures limits notifications to failed or errored runs
+	// (stopped is not a failure).
+	OnlyFailures bool      `json:"only_failures"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// NotificationView is the API representation of a NotificationChannel:
+// the URL is never returned, only URLMasked.
+type NotificationView struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Kind         string    `json:"kind"`
+	URLMasked    string    `json:"url_masked"`
+	Events       []string  `json:"events"`
+	OnlyFailures bool      `json:"only_failures"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// NotificationRequest is the body of POST /api/notifications and
+// PUT /api/notifications/{id}. On update an empty URL keeps the stored one.
+// Enabled defaults to true on create and keeps the stored value on update
+// when omitted.
+type NotificationRequest struct {
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind"`
+	URL          string   `json:"url"`
+	Events       []string `json:"events"`
+	OnlyFailures bool     `json:"only_failures"`
+	Enabled      *bool    `json:"enabled,omitempty"`
+}

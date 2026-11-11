@@ -311,6 +311,34 @@ Exit codes: 0 passed, 1 a threshold failed or a suite test did not pass, 2 usage
 
 [`examples/ci/github-actions.yml`](examples/ci/github-actions.yml) runs a suite, uploads the JUnit file as an artifact and publishes a test report. `actions/checkout` and `actions/setup-go` are pinned to the same commit SHAs as this repo's CI; `actions/upload-artifact` and `dorny/test-reporter` use major version tags, because no verified SHAs were available when the example was written. Pin them to SHAs if your policy requires it.
 
+## Notifications
+
+GoLoad can post to Slack or to any webhook when a run or a suite run finishes
+(**Notifications** page in the UI, or `/api/notifications`).
+
+**Slack:** create an [incoming webhook](https://api.slack.com/messaging/webhooks)
+for the channel you want, then add a channel of type *Slack* and paste the
+`https://hooks.slack.com/services/...` URL. **Webhook:** any `https://` endpoint;
+it receives `{"event": "run_finished", "run": {...}}` (the run without its YAML)
+or `{"event": "suite_finished", "suite_run": {...}}`. Use *Send test* to check a
+channel.
+
+- **Events:** `run_finished` (passed, failed, stopped or error) and
+  `suite_finished`. Runs started by a suite also send `run_finished`, in
+  addition to the suite's own `suite_finished`; subscribe a channel to
+  `suite_finished` only if you want one message per suite.
+- **Only failures:** send only when the status is `failed` or `error`. A
+  `stopped` run is not a failure.
+- **Links:** start the server with `-public-url https://goload.example.com` (or
+  `GOLOAD_PUBLIC_URL`) to add a link to the run or suite run in Slack
+  messages. Without it, messages have no link.
+- **The URL is a secret.** The API and UI only show a masked form
+  (`https://hooks.slack.com/…a1b2`), it is never logged, and editing a channel
+  with an empty URL keeps the stored one. `http://` is accepted only for
+  `localhost` / `127.0.0.1`.
+- Delivery is asynchronous and never slows a run: 10 s timeout per request, two
+  retries with backoff on network errors and 5xx answers, none on 4xx.
+
 ## How it measures
 
 - **Open model (default).** The target is iterations per second. Arrival times come from the integral of the ramp, so there is no drift. When `max_vus` iterations are already in flight, a new arrival is dropped and counted, never queued.

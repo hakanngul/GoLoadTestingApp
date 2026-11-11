@@ -107,6 +107,7 @@ func (m *Manager) executeRemote(ctx context.Context, ar *activeRun, sc *scenario
 		fin := m.now()
 		run.FinishedAt = &fin
 		m.updateRun(run)
+		m.runFinished(run)
 		ar.finish(run)
 		m.remove(runID)
 	}
@@ -212,6 +213,7 @@ func (m *Manager) executeRemote(ctx context.Context, ar *activeRun, sc *scenario
 		final.Warnings = append(final.Warnings, wr.Warnings()...)
 	}
 	m.updateRun(final)
+	m.runFinished(final)
 	ar.finish(final)
 	m.remove(runID)
 }
