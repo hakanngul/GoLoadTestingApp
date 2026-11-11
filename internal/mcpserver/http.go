@@ -60,6 +60,12 @@ func HTTPHandler(api http.Handler, opts HTTPOptions) http.Handler {
 	}
 	inner := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
 		Stateless: true, JSONResponse: true, Logger: log,
+		// The SDK's DNS-rebinding guard rejects requests that reach a
+		// loopback address with a non-local Host header. That also blocks a
+		// reverse proxy on the same host (nginx/Caddy -> 127.0.0.1). With
+		// bearer auth a rebinding page cannot authenticate anyway, so the
+		// guard stays on only when /mcp is open.
+		DisableLocalhostProtection: opts.AuthRequired,
 	})
 	if !opts.AuthRequired {
 		return inner
