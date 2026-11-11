@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -138,7 +139,9 @@ var (
 		"latency.p99": true, "latency.mean": true, "latency.max": true,
 		"error_rate": true, "rps": true,
 	}
-	orderingOps = map[string]bool{"lt": true, "lte": true, "gt": true, "gte": true}
+	// RegressionMetrics lists the metrics a regression rule may name.
+	RegressionMetrics = []string{"p50_ms", "p90_ms", "p95_ms", "p99_ms", "mean_ms", "max_ms", "error_rate", "rps"}
+	orderingOps       = map[string]bool{"lt": true, "lte": true, "gt": true, "gte": true}
 	// assertOps lists the operators accepted for each assertion type.
 	assertOps = map[AssertType]map[string]bool{
 		AssertStatus:       {"eq": true, "ne": true, "lt": true, "lte": true, "gt": true, "gte": true},
@@ -259,7 +262,57 @@ func (s *Scenario) Validate() error {
 		}
 	}
 
+	// regression
+	for i, r := range s.Regression {
+		errs = append(errs, validateRegression(fmt.Sprintf("regression[%d]", i), r)...)
+	}
+
 	return errors.Join(errs...)
+}
+
+// validateRegression checks one regression rule: a known metric and
+// exactly one non-negative limit.
+func validateRegression(p string, r RegressionRule) []error {
+	var errs []error
+	add := func(path, format string, args ...any) {
+		errs = append(errs, &FieldError{Path: path, Msg: fmt.Sprintf(format, args...)})
+	}
+	known := false
+	for _, m := range RegressionMetrics {
+		known = known || m == r.Metric
+	}
+	if !known {
+		add(p+".metric", "unknown metric %q; want one of %s", r.Metric, strings.Join(RegressionMetrics, ", "))
+	}
+	limits := []struct {
+		key string
+		v   *float64
+	}{
+		{"max_increase_pct", r.MaxIncreasePct}, {"max_increase", r.MaxIncrease},
+		{"max_decrease_pct", r.MaxDecreasePct}, {"max_decrease", r.MaxDecrease},
+	}
+	set := 0
+	for _, l := range limits {
+		if l.v == nil {
+			continue
+		}
+		set++
+		switch {
+		case math.IsNaN(*l.v) || math.IsInf(*l.v, 0) || *l.v < 0:
+			add(p+"."+l.key, "must be a non-negative number")
+		case l.key == "max_decrease_pct" && *l.v > 100:
+			add(p+"."+l.key, "must be at most 100, got %v", *l.v)
+		case (l.key == "max_increase" || l.key == "max_decrease") && r.Metric == "error_rate" && *l.v > 1:
+			add(p+"."+l.key, "error_rate is a fraction between 0 and 1, got %v", *l.v)
+		}
+	}
+	switch {
+	case set == 0:
+		add(p, "set one of max_increase_pct, max_increase, max_decrease_pct, max_decrease")
+	case set > 1:
+		add(p, "set exactly one of max_increase_pct, max_increase, max_decrease_pct, max_decrease")
+	}
+	return errs
 }
 
 func validateStep(p string, st *Step) []error {

@@ -15,7 +15,9 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/metrics"
 	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 	"github.com/hakanngul/GoLoadTestingApp/internal/protocol"
+	"github.com/hakanngul/GoLoadTestingApp/internal/regression"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scenario"
+	"github.com/hakanngul/GoLoadTestingApp/internal/store"
 )
 
 // cpuWarnThreshold: above this load-generator CPU usage the run is flagged,
@@ -140,7 +142,8 @@ func (m *Manager) storeErrorGroups(runID string, g *metrics.ErrorGrouper) {
 // Status: stopped when the engine was cancelled (Stop or Shutdown; a Stop
 // that races with natural completion keeps the natural outcome); error
 // when the engine failed unexpectedly or thresholds could not be
-// evaluated; otherwise failed if any threshold failed, else passed. Data
+// evaluated; otherwise failed if any threshold or regression rule failed,
+// else passed. Data
 // exhaustion (unique mode) ends the run early but is not an error: it adds
 // a warning and thresholds decide.
 func (m *Manager) finalRun(ar *activeRun, sc *scenario.Scenario, sum metrics.Summary, runErr error, peakCPU float64) model.Run {
@@ -165,6 +168,24 @@ func (m *Manager) finalRun(ar *activeRun, sc *scenario.Scenario, sum metrics.Sum
 			Passed: r.Passed,
 		})
 		allPassed = allPassed && r.Passed
+	}
+
+	// Regression rules: compare with the test's baseline run (read now, at
+	// run end). A missing baseline only adds a warning.
+	if len(sc.Regression) > 0 {
+		base, lerr := m.loadBaseline(run.TestID)
+		if lerr != nil {
+			run.Warnings = append(run.Warnings, "regression check skipped: could not load baseline run: "+lerr.Error())
+		} else {
+			res, warn := regression.Check(sc.Regression, run.ID, s, base)
+			if warn != "" {
+				run.Warnings = append(run.Warnings, warn)
+			}
+			for _, r := range res {
+				run.Thresholds = append(run.Thresholds, r)
+				allPassed = allPassed && r.Passed
+			}
+		}
 	}
 
 	cancelled := errors.Is(runErr, context.Canceled)
@@ -194,6 +215,31 @@ func (m *Manager) finalRun(ar *activeRun, sc *scenario.Scenario, sum metrics.Sum
 	fin := m.now()
 	run.FinishedAt = &fin
 	return run
+}
+
+// loadBaseline returns the test's baseline run, or nil (no error) when the
+// test has none or either record is gone.
+func (m *Manager) loadBaseline(testID string) (*model.Run, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	t, err := m.store.GetTest(ctx, testID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if t.BaselineRunID == "" {
+		return nil, nil
+	}
+	base, err := m.store.GetRun(ctx, t.BaselineRunID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &base, nil
 }
 
 // emitPoint converts one interval snapshot into a MetricPoint, stores it

@@ -19,6 +19,7 @@ import {
   runDurationS,
   shortId,
 } from '../lib/format';
+import { fmtRegressionValue, isRegression, regressionMetric, regressionRule } from '../lib/regression';
 import { useAsync, useNow } from '../lib/hooks';
 import { OP_SYMBOL, summarizeYaml, unitFor } from '../lib/scenario';
 import { remoteWorkers } from '../lib/workers';
@@ -613,10 +614,10 @@ export function ResultView({ run: initialRun }: { run: Run }) {
                       </td>
                       <td className="mono">{t.metric}</td>
                       <td className="num mono">
-                        {OP_SYMBOL[t.op] ?? t.op} {thresholdActual(t.metric, t.value)}
+                        {isRegression(t) ? regressionRule(t) : `${OP_SYMBOL[t.op] ?? t.op} ${thresholdActual(t.metric, t.value)}`}
                       </td>
                       <td className={`num ${t.passed ? '' : 'bad'}`} style={{ fontWeight: 600 }}>
-                        {thresholdActual(t.metric, t.actual)}
+                        {isRegression(t) ? fmtRegressionValue(regressionMetric(t), t.actual) : thresholdActual(t.metric, t.actual)}
                       </td>
                     </tr>
                   ))}

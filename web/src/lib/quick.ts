@@ -257,6 +257,7 @@ export function quickToForm(q: QuickForm, base?: ScenarioForm | null): ScenarioF
   if (q.checkStatus && q.status.trim()) step.assert = [{ type: 'status', expr: '', op: 'eq', value: q.status.trim() }];
   f.steps = [step];
 
+  f.regression = base ? base.regression.map((r) => ({ ...r })) : [];
   f.thresholds = [];
   if (q.checkP95 && q.p95Ms.trim()) f.thresholds.push({ metric: 'latency.p95', op: 'lt', value: q.p95Ms.trim() });
   if (q.checkErrors && q.errorPct.trim())
@@ -376,6 +377,8 @@ export function formToQuick(f: ScenarioForm): QuickOutcome {
       q.errorPct = pctFromFraction(t.value);
     } else reasons.push(`Threshold ${t.metric} ${OP_SYMBOL[t.op] ?? t.op} ${t.value} (only p95 < and error rate < fit)`);
   }
+
+  if (f.regression.length) reasons.push('Has regression rules (baseline comparison)');
 
   // ----- auth + data -----
   const a = f.auth;

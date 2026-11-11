@@ -125,6 +125,9 @@ loop:
 	}
 
 	printSummary(stdout, sum, results)
+	if len(sc.Regression) > 0 {
+		fmt.Fprintln(stdout, "\nnote: regression rules are skipped (they compare with a test's baseline run; use the server)")
+	}
 	printErrorGroups(stdout, groups.Snapshot(), 10)
 	switch {
 	case interrupted:

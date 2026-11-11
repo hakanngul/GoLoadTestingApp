@@ -6,6 +6,8 @@ import {
   DATA_MODES,
   EXTRACT_SOURCES,
   METHODS,
+  REGRESSION_KINDS,
+  REGRESSION_METRICS,
   THRESHOLD_METRICS,
   THRESHOLD_OPS,
   OP_SYMBOL,
@@ -21,6 +23,7 @@ import {
   type FormAuth,
   type FormStep,
   type LoadModel,
+  type RegressionKind,
   type ScenarioForm,
 } from '../lib/scenario';
 import { KVEditor } from './KVEditor';
@@ -82,6 +85,7 @@ export function ScenarioFormView({
     { id: 'sec-data', label: 'Data', meta: form.data.enabled ? form.data.file || '—' : 'off' },
     { id: 'sec-steps', label: 'Steps', meta: String(form.steps.length) },
     { id: 'sec-thresholds', label: 'Thresholds', meta: String(form.thresholds.length) },
+    { id: 'sec-regression', label: 'Regression', meta: String(form.regression.length) },
   ];
 
   return (
@@ -424,6 +428,86 @@ export function ScenarioFormView({
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        )}
+      </Section>
+
+      <Section
+        id="sec-regression"
+        title="Regression vs baseline"
+        extra={
+          <button
+            className="btn sm"
+            onClick={() => mutate((f) => void f.regression.push({ metric: 'p95_ms', kind: 'max_increase_pct', value: '20' }))}
+          >
+            <Icon name="plus" size={12} /> Add rule
+          </button>
+        }
+      >
+        {form.regression.length === 0 ? (
+          <div className="hint">No regression rules — runs are not compared with the test&apos;s baseline run.</div>
+        ) : (
+          <table className="t editable">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Limit</th>
+                <th style={{ width: 160 }}>Value</th>
+                <th style={{ width: 40 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {form.regression.map((r, i) => (
+                <tr key={i}>
+                  <td>
+                    <select
+                      className="input mono"
+                      value={r.metric}
+                      onChange={(e) => mutate((f) => void (f.regression[i].metric = e.target.value))}
+                    >
+                      {!REGRESSION_METRICS.includes(r.metric) && <option value={r.metric}>{r.metric || '—'}</option>}
+                      {REGRESSION_METRICS.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <select
+                      className="input"
+                      value={r.kind}
+                      onChange={(e) => mutate((f) => void (f.regression[i].kind = e.target.value as RegressionKind))}
+                    >
+                      {REGRESSION_KINDS.map((k) => (
+                        <option key={k.value} value={k.value}>
+                          {k.label}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      className="input num"
+                      type="number"
+                      step="any"
+                      min={0}
+                      value={r.value}
+                      onChange={(e) => mutate((f) => void (f.regression[i].value = e.target.value))}
+                    />
+                  </td>
+                  <td>
+                    <button
+                      className="btn ghost icon sm"
+                      onClick={() => mutate((f) => void f.regression.splice(i, 1))}
+                      aria-label="Remove rule"
+                    >
+                      <Icon name="x" size={14} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}

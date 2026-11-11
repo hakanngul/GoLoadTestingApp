@@ -73,6 +73,8 @@ export interface ThresholdResult {
   value: number;
   actual: number;
   passed: boolean;
+  /** Baseline run's value; set on regression rows (metric "<name> vs baseline"). */
+  baseline?: number;
 }
 
 /** One second of a run (live stream and stored time series). */
