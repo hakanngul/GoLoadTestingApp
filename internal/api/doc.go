@@ -63,8 +63,11 @@
 //	GET    /api/reports/overview?days=30     -> model.Overview
 //
 //	Schedules (internal/scheduler; 503 when the server has no scheduler):
-//	GET    /api/schedules?test_id=           -> []model.Schedule (oldest first; test_name filled)
+//	GET    /api/schedules?test_id=           -> []model.Schedule (oldest first; test_name / suite_name filled)
 //	POST   /api/schedules                    model.ScheduleRequest -> 201 model.Schedule
+//	                                         (a schedule targets exactly one of test_id and suite_id; a
+//	                                         suite schedule starts a suite run per occurrence and must not
+//	                                         set load or workers; last_run_id is then a suite run ID)
 //	                                         (400 "invalid schedule", Details = "field: message"; enabled
 //	                                         defaults to true; next_run_at computed from the definition)
 //	GET    /api/schedules/{id}               -> model.Schedule
@@ -72,7 +75,9 @@
 //	                                         from now; last_* kept)
 //	DELETE /api/schedules/{id}               -> 204 (runs it started keep schedule_id)
 //	POST   /api/schedules/{id}/run-now       -> 201 model.Run (starts now with the schedule's overrides,
-//	                                         ignoring timing, enabled and overlap; next_run_at unchanged)
+//	                                         ignoring timing, enabled and overlap; next_run_at unchanged);
+//	                                         for a suite schedule 201 {"suite_run": model.SuiteRun}
+//	                                         (409 when the suite is already running)
 //	POST   /api/schedules/preview            model.SchedulePreviewRequest {kind, at|cron, timezone, count}
 //	                                         -> model.SchedulePreview (always 200; next count fire times,
 //	                                         default 5, max 50, or errors)

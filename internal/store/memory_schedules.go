@@ -36,6 +36,9 @@ func (m *Memory) scheduleLocked(sc *model.Schedule) model.Schedule {
 	if mt, ok := m.tests[sc.TestID]; ok {
 		out.TestName = mt.test.Name
 	}
+	if su, ok := m.suites[sc.SuiteID]; ok {
+		out.SuiteName = su.Name
+	}
 	return out
 }
 
@@ -76,6 +79,17 @@ func (m *Memory) GetSchedule(ctx context.Context, id string) (model.Schedule, er
 	return m.scheduleLocked(sc), nil
 }
 
+// scheduleTargetExistsLocked reports whether the test or suite s targets
+// exists (exactly one of them is set).
+func (m *Memory) scheduleTargetExistsLocked(s model.Schedule) bool {
+	if s.SuiteID != "" {
+		_, ok := m.suites[s.SuiteID]
+		return ok && s.TestID == ""
+	}
+	_, ok := m.tests[s.TestID]
+	return ok
+}
+
 // specOf copies the stored (user-editable) fields of s.
 func specOf(dst *model.Schedule, s model.Schedule) {
 	c := cloneSchedule(s)
@@ -84,14 +98,14 @@ func specOf(dst *model.Schedule, s model.Schedule) {
 	dst.NextRunAt = c.NextRunAt
 }
 
-// CreateSchedule stores a new schedule for an existing test.
+// CreateSchedule stores a new schedule for an existing test or suite.
 func (m *Memory) CreateSchedule(ctx context.Context, s model.Schedule) (model.Schedule, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Schedule{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.tests[s.TestID]; !ok {
+	if !m.scheduleTargetExistsLocked(s) {
 		return model.Schedule{}, ErrNotFound
 	}
 	ts := now()
@@ -112,7 +126,7 @@ func (m *Memory) UpdateSchedule(ctx context.Context, s model.Schedule) (model.Sc
 	if !ok {
 		return model.Schedule{}, ErrNotFound
 	}
-	if _, ok := m.tests[s.TestID]; !ok {
+	if !m.scheduleTargetExistsLocked(s) {
 		return model.Schedule{}, ErrNotFound
 	}
 	specOf(cur, s)

@@ -16,31 +16,33 @@ var _ ScheduleStore = (*Postgres)(nil)
 // Schedule queries, written out as constants (the column list matches
 // pgScheduleRow.dest).
 const (
-	pgGetScheduleSQL = `SELECT s.id::text, s.test_id::text, t.name, s.name, s.enabled, s.kind, s.run_at_local,
-	s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
+	pgGetScheduleSQL = `SELECT s.id::text, COALESCE(s.test_id::text, ''), COALESCE(s.suite_id::text, ''), COALESCE(t.name, ''),
+	COALESCE(su.name, ''), s.name, s.enabled, s.kind, s.run_at_local, s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
 	s.created_at, s.updated_at, s.next_run_at, s.last_run_at, s.last_run_id, s.last_status, s.last_message
-	FROM schedules s JOIN tests t ON t.id = s.test_id WHERE s.id = $1`
+	FROM schedules s LEFT JOIN tests t ON t.id = s.test_id LEFT JOIN suites su ON su.id = s.suite_id WHERE s.id = $1`
 
-	pgListSchedulesSQL = `SELECT s.id::text, s.test_id::text, t.name, s.name, s.enabled, s.kind, s.run_at_local,
-	s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
+	pgListSchedulesSQL = `SELECT s.id::text, COALESCE(s.test_id::text, ''), COALESCE(s.suite_id::text, ''), COALESCE(t.name, ''),
+	COALESCE(su.name, ''), s.name, s.enabled, s.kind, s.run_at_local, s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
 	s.created_at, s.updated_at, s.next_run_at, s.last_run_at, s.last_run_id, s.last_status, s.last_message
-	FROM schedules s JOIN tests t ON t.id = s.test_id
+	FROM schedules s LEFT JOIN tests t ON t.id = s.test_id LEFT JOIN suites su ON su.id = s.suite_id
 	ORDER BY s.created_at, s.id`
 
-	pgListTestSchedulesSQL = `SELECT s.id::text, s.test_id::text, t.name, s.name, s.enabled, s.kind, s.run_at_local,
-	s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
+	pgListTestSchedulesSQL = `SELECT s.id::text, COALESCE(s.test_id::text, ''), COALESCE(s.suite_id::text, ''), COALESCE(t.name, ''),
+	COALESCE(su.name, ''), s.name, s.enabled, s.kind, s.run_at_local, s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
 	s.created_at, s.updated_at, s.next_run_at, s.last_run_at, s.last_run_id, s.last_status, s.last_message
-	FROM schedules s JOIN tests t ON t.id = s.test_id WHERE s.test_id = $1
+	FROM schedules s LEFT JOIN tests t ON t.id = s.test_id LEFT JOIN suites su ON su.id = s.suite_id WHERE s.test_id = $1
 	ORDER BY s.created_at, s.id`
 
-	pgCreateScheduleSQL = `INSERT INTO schedules (id, test_id, name, enabled, kind, run_at_local, cron,
+	pgCreateScheduleSQL = `INSERT INTO schedules (id, test_id, suite_id, name, enabled, kind, run_at_local, cron,
 	timezone, load_override, workers, label, notes, overlap, queue_timeout_ms,
 	created_at, updated_at, next_run_at)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15, $15, $16)`
+	VALUES ($1, NULLIF($2, '')::uuid, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12,
+	$13, $14, $15, $16, $16, $17)`
 
-	pgUpdateScheduleSQL = `UPDATE schedules SET test_id = $2, name = $3, enabled = $4, kind = $5,
-	run_at_local = $6, cron = $7, timezone = $8, load_override = $9::jsonb, workers = $10, label = $11,
-	notes = $12, overlap = $13, queue_timeout_ms = $14, updated_at = $15, next_run_at = $16
+	pgUpdateScheduleSQL = `UPDATE schedules SET test_id = NULLIF($2, '')::uuid, suite_id = NULLIF($3, '')::uuid, name = $4,
+	enabled = $5, kind = $6, run_at_local = $7, cron = $8, timezone = $9, load_override = $10::jsonb,
+	workers = $11, label = $12, notes = $13, overlap = $14, queue_timeout_ms = $15, updated_at = $16,
+	next_run_at = $17
 	WHERE id = $1`
 
 	pgAdvanceScheduleSQL = `UPDATE schedules SET next_run_at = $3, enabled = $4,
@@ -66,7 +68,7 @@ type pgScheduleRow struct {
 
 func (r *pgScheduleRow) dest() []any {
 	s := &r.s
-	return []any{&s.ID, &s.TestID, &s.TestName, &s.Name, &s.Enabled, &r.kind, &s.At,
+	return []any{&s.ID, &s.TestID, &s.SuiteID, &s.TestName, &s.SuiteName, &s.Name, &s.Enabled, &r.kind, &s.At,
 		&s.Cron, &s.Timezone, &r.load, &r.workers, &s.Label, &s.Notes, &r.overlap, &s.QueueTimeoutMs,
 		&s.CreatedAt, &s.UpdatedAt, &r.nextRunAt, &r.lastRunAt, &s.LastRunID, &s.LastStatus, &s.LastMessage}
 }
@@ -172,9 +174,9 @@ func (p *Postgres) GetSchedule(ctx context.Context, id string) (model.Schedule, 
 	return p.getSchedule(ctx, p.pool, id)
 }
 
-// CreateSchedule stores a new schedule for an existing test.
+// CreateSchedule stores a new schedule for an existing test or suite.
 func (p *Postgres) CreateSchedule(ctx context.Context, sc model.Schedule) (model.Schedule, error) {
-	if !isUUID(sc.TestID) {
+	if !scheduleTargetOK(sc) {
 		return model.Schedule{}, ErrNotFound
 	}
 	load, err := pgLoad(sc.Load)
@@ -185,7 +187,7 @@ func (p *Postgres) CreateSchedule(ctx context.Context, sc model.Schedule) (model
 	var out model.Schedule
 	err = pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, pgCreateScheduleSQL,
-			id, sc.TestID, sc.Name, sc.Enabled, string(sc.Kind), sc.At, sc.Cron, sc.Timezone, load,
+			id, sc.TestID, sc.SuiteID, sc.Name, sc.Enabled, string(sc.Kind), sc.At, sc.Cron, sc.Timezone, load,
 			sc.Workers, sc.Label, sc.Notes, string(sc.Overlap), sc.QueueTimeoutMs, now(),
 			pgOptTime(sc.NextRunAt)); err != nil {
 			return mapErr(err)
@@ -201,7 +203,7 @@ func (p *Postgres) CreateSchedule(ctx context.Context, sc model.Schedule) (model
 
 // UpdateSchedule replaces the spec, Enabled and NextRunAt of a schedule.
 func (p *Postgres) UpdateSchedule(ctx context.Context, sc model.Schedule) (model.Schedule, error) {
-	if !isUUID(sc.ID) || !isUUID(sc.TestID) {
+	if !isUUID(sc.ID) || !scheduleTargetOK(sc) {
 		return model.Schedule{}, ErrNotFound
 	}
 	load, err := pgLoad(sc.Load)
@@ -211,7 +213,7 @@ func (p *Postgres) UpdateSchedule(ctx context.Context, sc model.Schedule) (model
 	var out model.Schedule
 	err = pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, pgUpdateScheduleSQL,
-			sc.ID, sc.TestID, sc.Name, sc.Enabled, string(sc.Kind), sc.At, sc.Cron, sc.Timezone, load,
+			sc.ID, sc.TestID, sc.SuiteID, sc.Name, sc.Enabled, string(sc.Kind), sc.At, sc.Cron, sc.Timezone, load,
 			sc.Workers, sc.Label, sc.Notes, string(sc.Overlap), sc.QueueTimeoutMs, now(),
 			pgOptTime(sc.NextRunAt))
 		if err != nil {

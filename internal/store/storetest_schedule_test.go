@@ -254,3 +254,80 @@ func testRunScheduleID(t *testing.T, s Store) {
 		t.Fatalf("plain run ScheduleID = %q", plain.ScheduleID)
 	}
 }
+
+func testScheduleSuite(t *testing.T, s Store) {
+	ss := schedStore(t, s)
+	su := suiteStore(t, s)
+	c := ctx(t)
+	tt := mustTest(t, s, "suite-sched-test")
+	suite, err := su.CreateSuite(c, model.Suite{Name: "nightly-suite", Mode: model.SuiteSequential,
+		Items: []model.SuiteItem{{TestID: tt.ID}}})
+	if err != nil {
+		t.Fatalf("CreateSuite: %v", err)
+	}
+	other, err := su.CreateSuite(c, model.Suite{Name: "other-suite", Mode: model.SuiteSequential})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in := model.Schedule{ScheduleSpec: model.ScheduleSpec{SuiteID: suite.ID, Name: "suite nightly",
+		Kind: model.ScheduleRecurring, Cron: "0 3 * * *", Timezone: "UTC", Overlap: model.OverlapSkip},
+		Enabled: true, NextRunAt: tp(base.Add(time.Hour))}
+	got, err := ss.CreateSchedule(c, in)
+	if err != nil {
+		t.Fatalf("CreateSchedule suite: %v", err)
+	}
+	if got.SuiteID != suite.ID || got.SuiteName != "nightly-suite" || got.TestID != "" || got.TestName != "" || got.Load != nil {
+		t.Fatalf("created = %+v", got)
+	}
+	g, err := ss.GetSchedule(c, got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonEq(t, "get", g, got)
+
+	// A test schedule next to it keeps its test fields and has no suite.
+	ts, err := ss.CreateSchedule(c, sampleSchedule(tt.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts.SuiteID != "" || ts.SuiteName != "" || ts.TestName != "suite-sched-test" {
+		t.Fatalf("test schedule = %+v", ts)
+	}
+	all, err := ss.ListSchedules(c, "")
+	if err != nil || len(all) != 2 || all[0].ID != got.ID || all[1].ID != ts.ID {
+		t.Fatalf("ListSchedules = %+v, %v", all, err)
+	}
+	byTest, err := ss.ListSchedules(c, tt.ID)
+	if err != nil || len(byTest) != 1 || byTest[0].ID != ts.ID {
+		t.Fatalf("ListSchedules(test) = %+v, %v", byTest, err)
+	}
+
+	// Result and update keep the suite target.
+	r, err := ss.SetScheduleResult(c, got.ID, ScheduleResult{At: base, RunID: "suite-run-1", Status: model.ScheduleStarted})
+	if err != nil || r.LastRunID != "suite-run-1" || r.SuiteName != "nightly-suite" {
+		t.Fatalf("SetScheduleResult = %+v, %v", r, err)
+	}
+	upd := got
+	upd.SuiteID = other.ID
+	u, err := ss.UpdateSchedule(c, upd)
+	if err != nil || u.SuiteID != other.ID || u.SuiteName != "other-suite" || u.LastRunID != "suite-run-1" {
+		t.Fatalf("UpdateSchedule = %+v, %v", u, err)
+	}
+
+	// Missing or both targets.
+	_, err = ss.CreateSchedule(c, model.Schedule{ScheduleSpec: model.ScheduleSpec{SuiteID: missingID, Name: "x", Kind: model.ScheduleOnce}})
+	wantErr(t, "CreateSchedule missing suite", err, ErrNotFound)
+	_, err = ss.CreateSchedule(c, model.Schedule{ScheduleSpec: model.ScheduleSpec{TestID: tt.ID, SuiteID: suite.ID, Name: "x", Kind: model.ScheduleOnce}})
+	wantErr(t, "CreateSchedule both targets", err, ErrNotFound)
+
+	// Deleting the suite deletes its schedules, not the test's.
+	if err := su.DeleteSuite(c, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ss.GetSchedule(c, got.ID)
+	wantErr(t, "GetSchedule after suite delete", err, ErrNotFound)
+	if _, err := ss.GetSchedule(c, ts.ID); err != nil {
+		t.Fatalf("test schedule lost: %v", err)
+	}
+}

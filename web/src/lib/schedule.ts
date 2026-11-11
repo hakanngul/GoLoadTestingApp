@@ -1,7 +1,7 @@
 // Pure helpers for schedules: cron presets, human-readable descriptions,
 // time-zone formatting and the load-override form. No DOM access, so they
 // run under `node --test` (see test/schedule.test.mjs).
-import type { LoadOverride, ScheduleKind, ScheduleStatus } from '../api/types';
+import type { LoadOverride, Schedule, ScheduleKind, ScheduleRequest, ScheduleStatus } from '../api/types';
 import { parseDuration, stagesToProfile, type FormStage, type LoadModel, type ProfilePoint } from './scenario.ts';
 
 // ---------- recurrence presets <-> cron ----------
@@ -265,7 +265,8 @@ export function buildLoadOverride(f: LoadForm, model: LoadModel): { load?: LoadO
   const key = f.unit === 'users' ? 'load.users' : 'load.rate';
   const n = Number(f.target);
   if (!f.target.trim() || !Number.isInteger(n) || n < 1) {
-    errors[key] = f.unit === 'users' ? 'Enter a whole number of virtual users (>= 1)' : 'Enter a whole number of iterations per second (>= 1)';
+    errors[key] =
+      f.unit === 'users' ? 'Enter a whole number of virtual users (>= 1)' : 'Enter a whole number of iterations per second (>= 1)';
   }
   if (f.mode === 'scale' && f.unit !== unitForModel(model)) {
     errors[key] =
@@ -391,4 +392,34 @@ export function describeLoad(l: LoadOverride | undefined): string {
   const parts = [`ramp ${fmtGoDuration(effectiveRampUpMs(l.ramp_up_ms))}`, `hold ${fmtGoDuration(l.hold_ms)}`];
   if (l.ramp_down_ms) parts.push(`down ${fmtGoDuration(l.ramp_down_ms)}`);
   return `${peak} · ${parts.join(', ')}`;
+}
+
+// ---------- test / suite target ----------
+
+export type ScheduleTarget = 'test' | 'suite';
+
+/** What a schedule starts: a suite when it has a suite_id, else a test. */
+export function targetOf(s: Pick<Schedule, 'suite_id'>): ScheduleTarget {
+  return s.suite_id ? 'suite' : 'test';
+}
+
+/** The target fields of a request: exactly one of test_id / suite_id. */
+export function targetFields(target: ScheduleTarget, testId: string, suiteId: string): Pick<ScheduleRequest, 'test_id' | 'suite_id'> {
+  return target === 'suite' ? { suite_id: suiteId } : { test_id: testId };
+}
+
+/** Load column of the schedules table: suites carry per-item load. */
+export function describeScheduleLoad(s: Pick<Schedule, 'suite_id' | 'load'>): string {
+  return s.suite_id ? 'Per test in the suite' : describeLoad(s.load);
+}
+
+/** Link to what a schedule's last "started" result points at (a run or a suite run). */
+export function lastRunLink(s: Pick<Schedule, 'suite_id' | 'last_run_id' | 'last_status'>): { to: string; label: string } | null {
+  if (!s.last_run_id || s.last_status !== 'started') return null;
+  return s.suite_id ? { to: `/suite-runs/${s.last_run_id}`, label: 'view suite run' } : { to: `/runs/${s.last_run_id}`, label: 'view run' };
+}
+
+/** Where run-now leads: the run page, or the suite run page for `{suite_run}`. */
+export function runNowPath(res: { id: string } | { suite_run: { id: string } }): string {
+  return 'suite_run' in res ? `/suite-runs/${res.suite_run.id}` : `/runs/${res.id}`;
 }

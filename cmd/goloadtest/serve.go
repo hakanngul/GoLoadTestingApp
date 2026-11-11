@@ -145,19 +145,6 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	}
 	mgr := runner.NewManager(ropts)
 
-	// The scheduler starts planned runs through mgr (same allowlist and
-	// validation as the API). Every built-in store supports schedules.
-	var sched *scheduler.Scheduler
-	schedDone := make(chan struct{})
-	schedCtx, stopSched := context.WithCancel(context.Background())
-	defer stopSched()
-	if ss, ok := st.(scheduler.Store); ok {
-		sched = scheduler.New(scheduler.Options{Store: ss, Runner: mgr, Logger: log})
-		go func() { sched.Run(schedCtx); close(schedDone) }()
-	} else {
-		close(schedDone)
-	}
-
 	// Test suites run their tests through mgr too. Suite runs left active
 	// by a previous process are recorded as error (like runs above).
 	var suites *suite.Service
@@ -168,6 +155,20 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 		} else if n > 0 {
 			log.Info("marked interrupted suite runs as error", "count", n)
 		}
+	}
+
+	// The scheduler starts planned runs through mgr (same allowlist and
+	// validation as the API) and start suite runs through suites for
+	// suite schedules. Every built-in store supports schedules.
+	var sched *scheduler.Scheduler
+	schedDone := make(chan struct{})
+	schedCtx, stopSched := context.WithCancel(context.Background())
+	defer stopSched()
+	if ss, ok := st.(scheduler.Store); ok {
+		sched = scheduler.New(scheduler.Options{Store: ss, Runner: mgr, Suites: suiteStarterOrNil(suites), Logger: log})
+		go func() { sched.Run(schedCtx); close(schedDone) }()
+	} else {
+		close(schedDone)
 	}
 
 	ui, err := fs.Sub(web.Dist, "dist")
@@ -391,6 +392,15 @@ func splitList(s string) []string {
 // suitesOrNil keeps a nil *suite.Service from becoming a non-nil
 // api.Suites interface value.
 func suitesOrNil(s *suite.Service) api.Suites {
+	if s == nil {
+		return nil
+	}
+	return s
+}
+
+// suiteStarterOrNil keeps a nil *suite.Service from becoming a non-nil
+// scheduler.SuiteStarter interface value.
+func suiteStarterOrNil(s *suite.Service) scheduler.SuiteStarter {
 	if s == nil {
 		return nil
 	}

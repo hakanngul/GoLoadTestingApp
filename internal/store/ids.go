@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"time"
+
+	"github.com/hakanngul/GoLoadTestingApp/internal/model"
 )
 
 // defaultRunLimit is the ListRuns page size used when RunFilter.Limit <= 0.
@@ -68,3 +70,12 @@ func normTime(t time.Time) time.Time {
 
 // now returns the current time normalised with normTime.
 func now() time.Time { return normTime(time.Now()) }
+
+// scheduleTargetOK reports whether sc names a syntactically valid target:
+// a test ID or a suite ID (not both), as UUIDs.
+func scheduleTargetOK(sc model.Schedule) bool {
+	if sc.SuiteID != "" {
+		return sc.TestID == "" && isUUID(sc.SuiteID)
+	}
+	return isUUID(sc.TestID)
+}

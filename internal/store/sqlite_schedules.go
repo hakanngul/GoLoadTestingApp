@@ -15,33 +15,33 @@ var _ ScheduleStore = (*SQLite)(nil)
 // Schedule queries. The column list is repeated in each literal so every
 // query is a constant (see sqliteScheduleCols and sqlite_sql_test.go).
 const (
-	sqliteScheduleCols = `s.id, s.test_id, t.name, s.name, s.enabled, s.kind, s.run_at_local, s.cron,
-	s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
+	sqliteScheduleCols = `s.id, COALESCE(s.test_id, ''), COALESCE(s.suite_id, ''), COALESCE(t.name, ''), COALESCE(su.name, ''),
+	s.name, s.enabled, s.kind, s.run_at_local, s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
 	s.created_at, s.updated_at, s.next_run_at, s.last_run_at, s.last_run_id, s.last_status, s.last_message`
 
-	sqliteGetScheduleSQL = `SELECT s.id, s.test_id, t.name, s.name, s.enabled, s.kind, s.run_at_local, s.cron,
-	s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
+	sqliteGetScheduleSQL = `SELECT s.id, COALESCE(s.test_id, ''), COALESCE(s.suite_id, ''), COALESCE(t.name, ''), COALESCE(su.name, ''),
+	s.name, s.enabled, s.kind, s.run_at_local, s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
 	s.created_at, s.updated_at, s.next_run_at, s.last_run_at, s.last_run_id, s.last_status, s.last_message
-	FROM schedules s JOIN tests t ON t.id = s.test_id WHERE s.id = ?`
+	FROM schedules s LEFT JOIN tests t ON t.id = s.test_id LEFT JOIN suites su ON su.id = s.suite_id WHERE s.id = ?`
 
-	sqliteListSchedulesSQL = `SELECT s.id, s.test_id, t.name, s.name, s.enabled, s.kind, s.run_at_local, s.cron,
-	s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
+	sqliteListSchedulesSQL = `SELECT s.id, COALESCE(s.test_id, ''), COALESCE(s.suite_id, ''), COALESCE(t.name, ''), COALESCE(su.name, ''),
+	s.name, s.enabled, s.kind, s.run_at_local, s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
 	s.created_at, s.updated_at, s.next_run_at, s.last_run_at, s.last_run_id, s.last_status, s.last_message
-	FROM schedules s JOIN tests t ON t.id = s.test_id
+	FROM schedules s LEFT JOIN tests t ON t.id = s.test_id LEFT JOIN suites su ON su.id = s.suite_id
 	ORDER BY s.created_at, s.id`
 
-	sqliteListTestSchedulesSQL = `SELECT s.id, s.test_id, t.name, s.name, s.enabled, s.kind, s.run_at_local, s.cron,
-	s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
+	sqliteListTestSchedulesSQL = `SELECT s.id, COALESCE(s.test_id, ''), COALESCE(s.suite_id, ''), COALESCE(t.name, ''), COALESCE(su.name, ''),
+	s.name, s.enabled, s.kind, s.run_at_local, s.cron, s.timezone, s.load_override, s.workers, s.label, s.notes, s.overlap, s.queue_timeout_ms,
 	s.created_at, s.updated_at, s.next_run_at, s.last_run_at, s.last_run_id, s.last_status, s.last_message
-	FROM schedules s JOIN tests t ON t.id = s.test_id WHERE s.test_id = ?
+	FROM schedules s LEFT JOIN tests t ON t.id = s.test_id LEFT JOIN suites su ON su.id = s.suite_id WHERE s.test_id = ?
 	ORDER BY s.created_at, s.id`
 
-	sqliteCreateScheduleSQL = `INSERT INTO schedules (id, test_id, name, enabled, kind, run_at_local, cron,
+	sqliteCreateScheduleSQL = `INSERT INTO schedules (id, test_id, suite_id, name, enabled, kind, run_at_local, cron,
 	timezone, load_override, workers, label, notes, overlap, queue_timeout_ms,
 	created_at, updated_at, next_run_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
-	sqliteUpdateScheduleSQL = `UPDATE schedules SET test_id = ?, name = ?, enabled = ?, kind = ?,
+	sqliteUpdateScheduleSQL = `UPDATE schedules SET test_id = NULLIF(?, ''), suite_id = NULLIF(?, ''), name = ?, enabled = ?, kind = ?,
 	run_at_local = ?, cron = ?, timezone = ?, load_override = ?, workers = ?, label = ?, notes = ?,
 	overlap = ?, queue_timeout_ms = ?, updated_at = ?, next_run_at = ?
 	WHERE id = ?`
@@ -61,17 +61,17 @@ const (
 
 // sqliteScheduleRow receives one schedules row (sqliteScheduleCols).
 type sqliteScheduleRow struct {
-	s                     model.Schedule
-	enabled               int64
-	load                  sql.NullString
-	created, updated      int64
-	nextRunAt, lastRunAt  sql.NullInt64
-	kind, overlap, testNm string
+	s                              model.Schedule
+	enabled                        int64
+	load                           sql.NullString
+	created, updated               int64
+	nextRunAt, lastRunAt           sql.NullInt64
+	kind, overlap, testNm, suiteNm string
 }
 
 func (r *sqliteScheduleRow) dest() []any {
 	s := &r.s
-	return []any{&s.ID, &s.TestID, &r.testNm, &s.Name, &r.enabled, &r.kind, &s.At, &s.Cron,
+	return []any{&s.ID, &s.TestID, &s.SuiteID, &r.testNm, &r.suiteNm, &s.Name, &r.enabled, &r.kind, &s.At, &s.Cron,
 		&s.Timezone, &r.load, &s.Workers, &s.Label, &s.Notes, &r.overlap, &s.QueueTimeoutMs,
 		&r.created, &r.updated, &r.nextRunAt, &r.lastRunAt, &s.LastRunID, &s.LastStatus, &s.LastMessage}
 }
@@ -79,6 +79,7 @@ func (r *sqliteScheduleRow) dest() []any {
 func (r *sqliteScheduleRow) schedule() (model.Schedule, error) {
 	out := r.s
 	out.TestName = r.testNm
+	out.SuiteName = r.suiteNm
 	out.Enabled = r.enabled != 0
 	out.Kind = model.ScheduleKind(r.kind)
 	out.Overlap = model.OverlapPolicy(r.overlap)
@@ -181,9 +182,9 @@ func (s *SQLite) GetSchedule(ctx context.Context, id string) (model.Schedule, er
 	return s.getSchedule(ctx, s.r, id)
 }
 
-// CreateSchedule stores a new schedule for an existing test.
+// CreateSchedule stores a new schedule for an existing test or suite.
 func (s *SQLite) CreateSchedule(ctx context.Context, sc model.Schedule) (model.Schedule, error) {
-	if !isUUID(sc.TestID) {
+	if !scheduleTargetOK(sc) {
 		return model.Schedule{}, ErrNotFound
 	}
 	load, err := encodeLoad(sc.Load)
@@ -194,7 +195,7 @@ func (s *SQLite) CreateSchedule(ctx context.Context, sc model.Schedule) (model.S
 	var out model.Schedule
 	err = sqliteTx(ctx, s.w, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, sqliteCreateScheduleSQL,
-			id, sc.TestID, sc.Name, boolInt(sc.Enabled), string(sc.Kind), sc.At, sc.Cron,
+			id, sc.TestID, sc.SuiteID, sc.Name, boolInt(sc.Enabled), string(sc.Kind), sc.At, sc.Cron,
 			sc.Timezone, load, sc.Workers, sc.Label, sc.Notes, string(sc.Overlap), sc.QueueTimeoutMs,
 			ts, ts, optMicros(sc.NextRunAt)); err != nil {
 			return sqliteErr(err)
@@ -210,7 +211,7 @@ func (s *SQLite) CreateSchedule(ctx context.Context, sc model.Schedule) (model.S
 
 // UpdateSchedule replaces the spec, Enabled and NextRunAt of a schedule.
 func (s *SQLite) UpdateSchedule(ctx context.Context, sc model.Schedule) (model.Schedule, error) {
-	if !isUUID(sc.ID) || !isUUID(sc.TestID) {
+	if !isUUID(sc.ID) || !scheduleTargetOK(sc) {
 		return model.Schedule{}, ErrNotFound
 	}
 	load, err := encodeLoad(sc.Load)
@@ -220,7 +221,7 @@ func (s *SQLite) UpdateSchedule(ctx context.Context, sc model.Schedule) (model.S
 	var out model.Schedule
 	err = sqliteTx(ctx, s.w, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, sqliteUpdateScheduleSQL,
-			sc.TestID, sc.Name, boolInt(sc.Enabled), string(sc.Kind), sc.At, sc.Cron, sc.Timezone,
+			sc.TestID, sc.SuiteID, sc.Name, boolInt(sc.Enabled), string(sc.Kind), sc.At, sc.Cron, sc.Timezone,
 			load, sc.Workers, sc.Label, sc.Notes, string(sc.Overlap), sc.QueueTimeoutMs,
 			toMicros(now()), optMicros(sc.NextRunAt), sc.ID)
 		if err != nil {

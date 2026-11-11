@@ -200,8 +200,18 @@ func Preview(req model.SchedulePreviewRequest, now time.Time) model.SchedulePrev
 func Validate(spec model.ScheduleSpec, enabled bool, testYAML string, now time.Time) error {
 	var details []string
 	add := func(f string, a ...any) { details = append(details, fmt.Sprintf(f, a...)) }
-	if spec.TestID == "" {
-		add("test_id: required")
+	switch {
+	case spec.TestID == "" && spec.SuiteID == "":
+		add("test_id: required (or suite_id to schedule a test suite)")
+	case spec.TestID != "" && spec.SuiteID != "":
+		add("suite_id: set either test_id or suite_id, not both")
+	case spec.SuiteID != "":
+		if spec.Load != nil {
+			add("load: not supported for suite schedules; set load per test in the suite")
+		}
+		if spec.Workers != 0 {
+			add("workers: not supported for suite schedules; set workers per test in the suite")
+		}
 	}
 	if n := utf8.RuneCountInString(spec.Name); n == 0 || n > MaxNameLen {
 		add("name: must be between 1 and %d characters", MaxNameLen)
@@ -225,7 +235,9 @@ func Validate(spec model.ScheduleSpec, enabled bool, testYAML string, now time.T
 	if spec.QueueTimeoutMs < 0 || time.Duration(spec.QueueTimeoutMs)*time.Millisecond > MaxQueueTimeout {
 		add("queue_timeout_ms: must be between 0 and %d (24 h)", MaxQueueTimeout.Milliseconds())
 	}
-	if len(details) == 0 {
+	if spec.SuiteID != "" {
+		// A suite schedule's load was rejected above.
+	} else if len(details) == 0 {
 		details = append(details, CheckLoad(spec.Load, testYAML)...)
 	} else {
 		details = append(details, validateLoad(spec.Load)...)

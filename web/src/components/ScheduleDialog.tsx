@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { APIError, api } from '../api/client';
 import type { OverlapPolicy, Schedule, ScheduleKind, SchedulePreview, ScheduleRequest, Test } from '../api/types';
 import { fmtSeconds } from '../lib/format';
-import { useDebounced, useNow } from '../lib/hooks';
+import { useAsync, useDebounced, useNow } from '../lib/hooks';
 import { summarizeYaml, unitFor } from '../lib/scenario';
 import {
   browserTimezone,
@@ -17,12 +17,14 @@ import {
   fmtRelative,
   loadFormFromOverride,
   overrideProfile,
+  targetFields,
   timezoneList,
   WEEK_ORDER,
   type LoadForm,
   type LoadMode,
   type Preset,
   type Recurrence,
+  type ScheduleTarget,
   unitForModel,
 } from '../lib/schedule';
 import { ProfileChart } from './charts';
@@ -56,7 +58,8 @@ function FieldErrors({ msgs }: { msgs: string[] }) {
 
 /**
  * Creates or edits a schedule. `test` fixes the test (Schedule button on a
- * test); otherwise `tests` offers a picker (Schedules page).
+ * test); otherwise `tests` offers a picker and a Test | Suite switch
+ * (Schedules page); a suite schedule picks a suite and has no load/workers.
  */
 export function ScheduleDialog({
   test,
@@ -76,6 +79,15 @@ export function ScheduleDialog({
   const initialOnce = schedule?.kind === 'once' && schedule.at ? schedule.at.split('T') : null;
   const fallbackOnce = defaultOnce(initialTz, Date.now());
 
+  const [target, setTarget] = useState<ScheduleTarget>(schedule?.suite_id ? 'suite' : 'test');
+  const isSuite = !test && target === 'suite';
+  const suites = useAsync(async () => (test ? [] : await api.listSuites()), []);
+  const [suiteId, setSuiteId] = useState(schedule?.suite_id ?? '');
+  useEffect(() => {
+    // Preselect the first suite once the list is there.
+    if (!suiteId && suites.data && suites.data.length > 0) setSuiteId(suites.data[0].id);
+  }, [suiteId, suites.data]);
+  const chosenSuite = suites.data?.find((su) => su.id === suiteId);
   const [testId, setTestId] = useState(schedule?.test_id ?? test?.id ?? tests?.[0]?.id ?? '');
   const [name, setName] = useState(schedule?.name ?? (test ? `${test.name} nightly` : ''));
   const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
@@ -147,15 +159,20 @@ export function ScheduleDialog({
   }, [previewKey]);
 
   const local = useMemo(() => overrideProfile(load, sum ? { model: sum.model, stages: sum.stages } : null), [load, sum]);
-  const built = buildLoadOverride(load, model);
+  const built = isSuite ? { load: undefined, errors: {} as Record<string, string> } : buildLoadOverride(load, model);
   const allErrors: Record<string, string[]> = { ...fe };
   for (const [k, v] of Object.entries(built.errors)) allErrors[k] = [v];
   const nWorkers = Number(workers);
-  const workersOk = Number.isInteger(nWorkers) && nWorkers >= 1 && nWorkers <= 1000;
+  const workersOk = isSuite || (Number.isInteger(nWorkers) && nWorkers >= 1 && nWorkers <= 1000);
   const nQueue = Number(queueMin);
   const queueOk = overlap === 'skip' || (Number.isFinite(nQueue) && nQueue >= 1 && nQueue <= 1440);
   const canSave =
-    !busy && !!testId && name.trim() !== '' && workersOk && queueOk && Object.keys(built.errors).length === 0 &&
+    !busy &&
+    (isSuite ? !!suiteId : !!testId) &&
+    name.trim() !== '' &&
+    workersOk &&
+    queueOk &&
+    Object.keys(built.errors).length === 0 &&
     (kind === 'once' ? !!date && !!time : cron !== '');
 
   const save = async () => {
@@ -163,12 +180,12 @@ export function ScheduleDialog({
     setError(null);
     setFe({});
     const req: ScheduleRequest = {
-      test_id: testId,
+      ...targetFields(isSuite ? 'suite' : 'test', testId, suiteId),
       name: name.trim(),
       enabled,
       kind,
       timezone: tz,
-      workers: nWorkers,
+      workers: isSuite ? 0 : nWorkers,
       label: label.trim(),
       notes,
       overlap,
@@ -201,10 +218,10 @@ export function ScheduleDialog({
       title={
         <span className="row" style={{ gap: 8 }}>
           <Icon name="calendar" size={15} />
-          {schedule ? 'Edit schedule' : 'Schedule a test'}
-          {chosen && (
+          {schedule ? 'Edit schedule' : isSuite ? 'Schedule a suite' : 'Schedule a test'}
+          {(isSuite ? chosenSuite : chosen) && (
             <span className="mono text-2" style={{ fontSize: 13, fontWeight: 500 }}>
-              {chosen.name}
+              {(isSuite ? chosenSuite : chosen)?.name}
             </span>
           )}
         </span>
@@ -231,15 +248,48 @@ export function ScheduleDialog({
           <div className="sched-grid">
             {!test && (
               <div className="field">
-                <label htmlFor="sch-test">Test</label>
-                <select id="sch-test" className="input" value={testId} onChange={(e) => setTestId(e.target.value)} disabled={!!schedule && !tests}>
-                  {(tests ?? []).map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-                <FieldErrors msgs={errorsFor(fe, 'test_id')} />
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <label htmlFor={isSuite ? 'sch-suite' : 'sch-test'}>{isSuite ? 'Suite' : 'Test'}</label>
+                  <div className="segmented" role="tablist" aria-label="Schedule target">
+                    <button className={!isSuite ? 'on' : ''} onClick={() => setTarget('test')} role="tab" aria-selected={!isSuite}>
+                      Test
+                    </button>
+                    <button className={isSuite ? 'on' : ''} onClick={() => setTarget('suite')} role="tab" aria-selected={isSuite}>
+                      Suite
+                    </button>
+                  </div>
+                </div>
+                {isSuite ? (
+                  <>
+                    <select id="sch-suite" className="input" value={suiteId} onChange={(e) => setSuiteId(e.target.value)}>
+                      {(suites.data ?? []).map((su) => (
+                        <option key={su.id} value={su.id}>
+                          {su.name}
+                        </option>
+                      ))}
+                    </select>
+                    {suites.data && suites.data.length === 0 && <div className="hint">No suites yet — create one on the Suites page.</div>}
+                    {suites.error ? <ErrorAlert error={suites.error} title="Failed to load suites" /> : null}
+                    <FieldErrors msgs={errorsFor(fe, 'suite_id', 'items/suite_id', 'items')} />
+                  </>
+                ) : (
+                  <>
+                    <select
+                      id="sch-test"
+                      className="input"
+                      value={testId}
+                      onChange={(e) => setTestId(e.target.value)}
+                      disabled={!!schedule && !tests}
+                    >
+                      {(tests ?? []).map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                    <FieldErrors msgs={errorsFor(fe, 'test_id')} />
+                  </>
+                )}
               </div>
             )}
             <div className="field" style={test ? { gridColumn: 'span 2' } : undefined}>
@@ -352,9 +402,7 @@ export function ScheduleDialog({
                               key={d}
                               className={`day-chip ${on ? 'on' : ''}`}
                               aria-pressed={on}
-                              onClick={() =>
-                                setRec((r) => ({ ...r, days: on ? r.days.filter((x) => x !== d) : [...r.days, d] }))
-                              }
+                              onClick={() => setRec((r) => ({ ...r, days: on ? r.days.filter((x) => x !== d) : [...r.days, d] }))}
                             >
                               {DAY_SHORT[d].slice(0, 2)}
                             </button>
@@ -392,106 +440,116 @@ export function ScheduleDialog({
           </section>
 
           {/* ---------- load ---------- */}
-          <section className="sched-section">
-            <div className="sched-section-title">Load</div>
-            <div className="segmented" aria-label="Load">
-              {LOAD_MODES.map((m) => (
-                <button key={m.id} className={load.mode === m.id ? 'on' : ''} onClick={() => setLoad((l) => ({ ...l, mode: m.id }))}>
-                  {m.label}
-                </button>
-              ))}
-            </div>
-            <div className="hint" style={{ marginTop: 8 }}>
-              {load.mode === 'keep' &&
-                (sum
-                  ? `Runs the scenario as saved: ${sum.model} model, peak ${sum.peak} ${unitFor(sum.model)}, ${fmtSeconds(sum.total)}.`
-                  : 'Runs the scenario as saved.')}
-              {load.mode === 'scale' && 'Keeps the stage shape and duration; every stage target is scaled so the peak becomes the new value.'}
-              {load.mode === 'profile' &&
-                'Replaces the stages with ramp-up → hold → optional ramp-down. Virtual users run the closed model, it/s the open model.'}{' '}
-              The saved test is never changed.
-            </div>
-            {load.mode !== 'keep' && (
-              <div className="sched-grid" style={{ marginTop: 12 }}>
-                <div className="field">
-                  <label htmlFor="sch-target">{load.mode === 'scale' ? 'New peak' : 'Target'}</label>
-                  <div className="input-unit">
-                    <input
-                      id="sch-target"
-                      className={`input num ${errorsFor(allErrors, 'load.users', 'load.rate').length ? 'invalid' : ''}`}
-                      inputMode="numeric"
-                      value={load.target}
-                      onChange={(e) => setLoad((l) => ({ ...l, target: e.target.value }))}
-                    />
-                    <select
-                      className="input"
-                      aria-label="Unit"
-                      value={load.unit}
-                      onChange={(e) => setLoad((l) => ({ ...l, unit: e.target.value as 'users' | 'rate' }))}
-                    >
-                      <option value="users">VUs</option>
-                      <option value="rate">it/s</option>
-                    </select>
-                  </div>
-                </div>
-                {load.mode === 'profile' ? (
-                  <div className="field">
-                    <span className="label">Ramp-up · Hold · Ramp-down</span>
-                    <div className="dur-triple">
-                      <input
-                        aria-label="Ramp-up"
-                        className={`input mono ${allErrors['load.ramp_up_ms'] ? 'invalid' : ''}`}
-                        placeholder="30s"
-                        value={load.rampUp}
-                        onChange={(e) => setLoad((l) => ({ ...l, rampUp: e.target.value }))}
-                      />
-                      <input
-                        aria-label="Hold"
-                        className={`input mono ${allErrors['load.hold_ms'] ? 'invalid' : ''}`}
-                        placeholder="10m"
-                        value={load.hold}
-                        onChange={(e) => setLoad((l) => ({ ...l, hold: e.target.value }))}
-                      />
-                      <input
-                        aria-label="Ramp-down"
-                        className={`input mono ${allErrors['load.ramp_down_ms'] ? 'invalid' : ''}`}
-                        placeholder="0s"
-                        value={load.rampDown}
-                        onChange={(e) => setLoad((l) => ({ ...l, rampDown: e.target.value }))}
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="field">
-                    <span className="label">Scenario peak</span>
-                    <div className="hint" style={{ paddingTop: 7 }}>
-                      {sum ? `${sum.peak} ${unitFor(sum.model)} → ${load.target || '?'} ${unit(load.unit)}` : '—'}
-                    </div>
-                  </div>
-                )}
-                <div style={{ gridColumn: 'span 2' }}>
-                  <FieldErrors msgs={errorsFor(allErrors, 'load')} />
-                </div>
+          {isSuite ? (
+            <section className="sched-section">
+              <div className="sched-section-title">Load</div>
+              <div className="hint">Each test in the suite uses its own load (set in the suite).</div>
+            </section>
+          ) : (
+            <section className="sched-section">
+              <div className="sched-section-title">Load</div>
+              <div className="segmented" aria-label="Load">
+                {LOAD_MODES.map((m) => (
+                  <button key={m.id} className={load.mode === m.id ? 'on' : ''} onClick={() => setLoad((l) => ({ ...l, mode: m.id }))}>
+                    {m.label}
+                  </button>
+                ))}
               </div>
-            )}
-          </section>
+              <div className="hint" style={{ marginTop: 8 }}>
+                {load.mode === 'keep' &&
+                  (sum
+                    ? `Runs the scenario as saved: ${sum.model} model, peak ${sum.peak} ${unitFor(sum.model)}, ${fmtSeconds(sum.total)}.`
+                    : 'Runs the scenario as saved.')}
+                {load.mode === 'scale' &&
+                  'Keeps the stage shape and duration; every stage target is scaled so the peak becomes the new value.'}
+                {load.mode === 'profile' &&
+                  'Replaces the stages with ramp-up → hold → optional ramp-down. Virtual users run the closed model, it/s the open model.'}{' '}
+                The saved test is never changed.
+              </div>
+              {load.mode !== 'keep' && (
+                <div className="sched-grid" style={{ marginTop: 12 }}>
+                  <div className="field">
+                    <label htmlFor="sch-target">{load.mode === 'scale' ? 'New peak' : 'Target'}</label>
+                    <div className="input-unit">
+                      <input
+                        id="sch-target"
+                        className={`input num ${errorsFor(allErrors, 'load.users', 'load.rate').length ? 'invalid' : ''}`}
+                        inputMode="numeric"
+                        value={load.target}
+                        onChange={(e) => setLoad((l) => ({ ...l, target: e.target.value }))}
+                      />
+                      <select
+                        className="input"
+                        aria-label="Unit"
+                        value={load.unit}
+                        onChange={(e) => setLoad((l) => ({ ...l, unit: e.target.value as 'users' | 'rate' }))}
+                      >
+                        <option value="users">VUs</option>
+                        <option value="rate">it/s</option>
+                      </select>
+                    </div>
+                  </div>
+                  {load.mode === 'profile' ? (
+                    <div className="field">
+                      <span className="label">Ramp-up · Hold · Ramp-down</span>
+                      <div className="dur-triple">
+                        <input
+                          aria-label="Ramp-up"
+                          className={`input mono ${allErrors['load.ramp_up_ms'] ? 'invalid' : ''}`}
+                          placeholder="30s"
+                          value={load.rampUp}
+                          onChange={(e) => setLoad((l) => ({ ...l, rampUp: e.target.value }))}
+                        />
+                        <input
+                          aria-label="Hold"
+                          className={`input mono ${allErrors['load.hold_ms'] ? 'invalid' : ''}`}
+                          placeholder="10m"
+                          value={load.hold}
+                          onChange={(e) => setLoad((l) => ({ ...l, hold: e.target.value }))}
+                        />
+                        <input
+                          aria-label="Ramp-down"
+                          className={`input mono ${allErrors['load.ramp_down_ms'] ? 'invalid' : ''}`}
+                          placeholder="0s"
+                          value={load.rampDown}
+                          onChange={(e) => setLoad((l) => ({ ...l, rampDown: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="field">
+                      <span className="label">Scenario peak</span>
+                      <div className="hint" style={{ paddingTop: 7 }}>
+                        {sum ? `${sum.peak} ${unitFor(sum.model)} → ${load.target || '?'} ${unit(load.unit)}` : '—'}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <FieldErrors msgs={errorsFor(allErrors, 'load')} />
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
           {/* ---------- run options ---------- */}
           <section className="sched-section">
             <div className="sched-section-title">Run options</div>
             <div className="sched-grid three">
-              <div className="field">
-                <label htmlFor="sch-workers">Workers</label>
-                <input
-                  id="sch-workers"
-                  className={`input num ${workersOk ? '' : 'invalid'}`}
-                  type="number"
-                  min={1}
-                  max={1000}
-                  value={workers}
-                  onChange={(e) => setWorkers(e.target.value)}
-                />
-              </div>
+              {!isSuite && (
+                <div className="field">
+                  <label htmlFor="sch-workers">Workers</label>
+                  <input
+                    id="sch-workers"
+                    className={`input num ${workersOk ? '' : 'invalid'}`}
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={workers}
+                    onChange={(e) => setWorkers(e.target.value)}
+                  />
+                </div>
+              )}
               <div className="field">
                 <label htmlFor="sch-overlap">If a run is active</label>
                 <select id="sch-overlap" className="input" value={overlap} onChange={(e) => setOverlap(e.target.value as OverlapPolicy)}>
@@ -530,13 +588,7 @@ export function ScheduleDialog({
                 <label htmlFor="sch-notes">
                   Notes <span className="label-opt">optional, copied to each run</span>
                 </label>
-                <input
-                  id="sch-notes"
-                  className="input"
-                  maxLength={10000}
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                />
+                <input id="sch-notes" className="input" maxLength={10000} value={notes} onChange={(e) => setNotes(e.target.value)} />
               </div>
               <div style={{ gridColumn: '1 / -1' }}>
                 <FieldErrors msgs={errorsFor(fe, 'workers', 'overlap', 'queue_timeout_ms', 'label', 'notes')} />
@@ -577,21 +629,23 @@ export function ScheduleDialog({
               The server must be running at these times. Runs it misses while stopped are recorded as <b>missed</b>, not run late.
             </div>
           </div>
-          <div className="sched-card">
-            <div className="sched-card-title">
-              <Icon name="runs" size={13} /> Load of each run
+          {!isSuite && (
+            <div className="sched-card">
+              <div className="sched-card-title">
+                <Icon name="runs" size={13} /> Load of each run
+              </div>
+              {local ? (
+                <>
+                  <div className="hint" style={{ marginBottom: 4 }}>
+                    {local.model} · peak {local.peak} {unitFor(local.model)} · {fmtSeconds(local.total)}
+                  </div>
+                  <ProfileChart points={local.points} unit={unitFor(local.model)} height={130} />
+                </>
+              ) : (
+                <div className="hint">Enter a valid load to see the profile.</div>
+              )}
             </div>
-            {local ? (
-              <>
-                <div className="hint" style={{ marginBottom: 4 }}>
-                  {local.model} · peak {local.peak} {unitFor(local.model)} · {fmtSeconds(local.total)}
-                </div>
-                <ProfileChart points={local.points} unit={unitFor(local.model)} height={130} />
-              </>
-            ) : (
-              <div className="hint">Enter a valid load to see the profile.</div>
-            )}
-          </div>
+          )}
         </aside>
       </div>
     </Modal>
