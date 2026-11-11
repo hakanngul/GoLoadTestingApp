@@ -41,6 +41,10 @@ type Config struct {
 	// Suites serves /api/suites and /api/suite-runs. nil answers those
 	// routes with 503.
 	Suites Suites
+	// Notifier sends the test message of POST /api/notifications/{id}/test.
+	// nil answers that route with 503. The channels themselves live in the
+	// store (store.NotificationStore; 503 when it is not implemented).
+	Notifier NotificationSender
 }
 
 // Limits on request bodies.
@@ -76,6 +80,7 @@ type server struct {
 	reporter  *report.Reporter
 	scheduler Scheduler
 	suites    Suites
+	notifier  NotificationSender
 
 	// heartbeat is the SSE keep-alive interval (overridable in tests).
 	heartbeat time.Duration
@@ -110,6 +115,7 @@ func newServer(cfg Config) *server {
 		reporter:  report.New(cfg.Store),
 		scheduler: cfg.Scheduler,
 		suites:    cfg.Suites,
+		notifier:  cfg.Notifier,
 		heartbeat: defaultHeartbeat,
 		trySem:    make(chan struct{}, maxConcurrentTries),
 		api:       http.NewServeMux(),
@@ -176,6 +182,13 @@ func (s *server) routes() {
 	m.HandleFunc("GET /api/suite-runs", s.withSuites(s.handleListSuiteRuns))
 	m.HandleFunc("GET /api/suite-runs/{id}", s.withSuites(s.handleGetSuiteRun))
 	m.HandleFunc("POST /api/suite-runs/{id}/stop", s.withSuites(s.handleStopSuiteRun))
+
+	// Notification channels.
+	m.HandleFunc("GET /api/notifications", s.handleListNotifications)
+	m.HandleFunc("POST /api/notifications", s.handleCreateNotification)
+	m.HandleFunc("PUT /api/notifications/{id}", s.handleUpdateNotification)
+	m.HandleFunc("DELETE /api/notifications/{id}", s.handleDeleteNotification)
+	m.HandleFunc("POST /api/notifications/{id}/test", s.handleTestNotification)
 }
 
 // handler assembles the middleware chain:

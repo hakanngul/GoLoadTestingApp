@@ -6,6 +6,9 @@ import type {
   Health,
   LiveStats,
   MetricPoint,
+  NotificationChannel,
+  NotificationRequest,
+  NotificationTestResult,
   Overview,
   Run,
   RunReport,
@@ -229,6 +232,13 @@ export const api = {
     request<SuiteRun[] | null>('GET', `/api/suites/${enc(suiteId)}/runs?limit=${limit}`).then((r) => r ?? []),
   getSuiteRun: (id: string) => request<SuiteRun>('GET', `/api/suite-runs/${enc(id)}`),
   stopSuiteRun: (id: string) => request<void>('POST', `/api/suite-runs/${enc(id)}/stop`),
+
+  // ---------- notifications ----------
+  listNotifications: () => request<NotificationChannel[] | null>('GET', '/api/notifications').then((r) => r ?? []),
+  createNotification: (req: NotificationRequest) => request<NotificationChannel>('POST', '/api/notifications', req),
+  updateNotification: (id: string, req: NotificationRequest) => request<NotificationChannel>('PUT', `/api/notifications/${enc(id)}`, req),
+  deleteNotification: (id: string) => request<void>('DELETE', `/api/notifications/${enc(id)}`),
+  testNotification: (id: string) => request<NotificationTestResult>('POST', `/api/notifications/${enc(id)}/test`),
 };
 
 // ---------- downloads ----------

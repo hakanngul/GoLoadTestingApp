@@ -20,6 +20,7 @@ const SchedulesPage = lazy(() => import('./pages/SchedulesPage').then((m) => ({ 
 const SuitesPage = lazy(() => import('./pages/SuitesPage').then((m) => ({ default: m.SuitesPage })));
 const SuitePage = lazy(() => import('./pages/SuitePage').then((m) => ({ default: m.SuitePage })));
 const SuiteRunPage = lazy(() => import('./pages/SuiteRunPage').then((m) => ({ default: m.SuiteRunPage })));
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then((m) => ({ default: m.NotificationsPage })));
 const WorkersPage = lazy(() => import('./pages/WorkersPage').then((m) => ({ default: m.WorkersPage })));
 
 /**
@@ -80,6 +81,9 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             <NavLink to="/compare">
               <Icon name="compare" /> Compare
             </NavLink>
+            <NavLink to="/notifications">
+              <Icon name="bell" /> Notifications
+            </NavLink>
             <NavLink to="/workers">
               <Icon name="workers" /> Workers
             </NavLink>
@@ -116,6 +120,7 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/reports/tests/:id" element={<TestReportPage />} />
             <Route path="/compare" element={<ComparePage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/workers" element={<WorkersPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

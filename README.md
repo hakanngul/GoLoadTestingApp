@@ -264,6 +264,34 @@ API: `/api/suites` (CRUD), `POST /api/suites/{id}/runs`,
 `GET /api/suite-runs/{id}`, `POST /api/suite-runs/{id}/stop` (see
 `internal/api/doc.go`).
 
+## Notifications
+
+GoLoad can post to Slack or to any webhook when a run or a suite run finishes
+(**Notifications** page in the UI, or `/api/notifications`).
+
+**Slack:** create an [incoming webhook](https://api.slack.com/messaging/webhooks)
+for the channel you want, then add a channel of type *Slack* and paste the
+`https://hooks.slack.com/services/...` URL. **Webhook:** any `https://` endpoint;
+it receives `{"event": "run_finished", "run": {...}}` (the run without its YAML)
+or `{"event": "suite_finished", "suite_run": {...}}`. Use *Send test* to check a
+channel.
+
+- **Events:** `run_finished` (passed, failed, stopped or error) and
+  `suite_finished`. Runs started by a suite also send `run_finished`, in
+  addition to the suite's own `suite_finished`; subscribe a channel to
+  `suite_finished` only if you want one message per suite.
+- **Only failures:** send only when the status is `failed` or `error`. A
+  `stopped` run is not a failure.
+- **Links:** start the server with `-public-url https://goload.example.com` (or
+  `GOLOAD_PUBLIC_URL`) to add a link to the run or suite run in Slack
+  messages. Without it, messages have no link.
+- **The URL is a secret.** The API and UI only show a masked form
+  (`https://hooks.slack.com/…a1b2`), it is never logged, and editing a channel
+  with an empty URL keeps the stored one. `http://` is accepted only for
+  `localhost` / `127.0.0.1`.
+- Delivery is asynchronous and never slows a run: 10 s timeout per request, two
+  retries with backoff on network errors and 5xx answers, none on 4xx.
+
 ## How it measures
 
 - **Open model (default).** The target is iterations per second. Arrival times come from the integral of the ramp, so there is no drift. When `max_vus` iterations are already in flight, a new arrival is dropped and counted, never queued.

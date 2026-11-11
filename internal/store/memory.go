@@ -22,12 +22,13 @@ type Memory struct {
 	tests   map[string]*memTest
 	names   map[string]string // test name -> test ID (unique index)
 	runs    map[string]*model.Run
-	metrics map[string][]memMetric         // run ID -> points, sorted by T
-	errs    map[string][]model.ErrorSample // run ID -> samples, sorted by T
-	groups  map[string][]model.ErrorGroup  // run ID -> final error groups
-	scheds  map[string]*model.Schedule     // schedule ID -> schedule (TestName empty)
-	suites  map[string]*model.Suite        // suite ID -> suite (item names empty)
-	sruns   map[string]*model.SuiteRun     // suite run ID -> suite run
+	metrics map[string][]memMetric                // run ID -> points, sorted by T
+	errs    map[string][]model.ErrorSample        // run ID -> samples, sorted by T
+	groups  map[string][]model.ErrorGroup         // run ID -> final error groups
+	scheds  map[string]*model.Schedule            // schedule ID -> schedule (TestName empty)
+	suites  map[string]*model.Suite               // suite ID -> suite (item names empty)
+	sruns   map[string]*model.SuiteRun            // suite run ID -> suite run
+	notifs  map[string]*model.NotificationChannel // channel ID -> channel
 }
 
 type memTest struct {
@@ -54,6 +55,7 @@ func NewMemory() *Memory {
 		scheds:  make(map[string]*model.Schedule),
 		suites:  make(map[string]*model.Suite),
 		sruns:   make(map[string]*model.SuiteRun),
+		notifs:  make(map[string]*model.NotificationChannel),
 	}
 }
 

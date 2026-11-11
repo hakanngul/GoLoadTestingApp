@@ -23,6 +23,8 @@ import (
 	"github.com/hakanngul/GoLoadTestingApp/internal/allowlist"
 	"github.com/hakanngul/GoLoadTestingApp/internal/api"
 	"github.com/hakanngul/GoLoadTestingApp/internal/cluster"
+	"github.com/hakanngul/GoLoadTestingApp/internal/model"
+	"github.com/hakanngul/GoLoadTestingApp/internal/notify"
 	"github.com/hakanngul/GoLoadTestingApp/internal/provision"
 	"github.com/hakanngul/GoLoadTestingApp/internal/runner"
 	"github.com/hakanngul/GoLoadTestingApp/internal/scheduler"
@@ -47,6 +49,8 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	workerToken := flags.String("worker-token", os.Getenv("GOLOAD_WORKER_TOKEN"), "token workers must present (required when -grpc-addr is set)")
 	retentionFlag := flags.String("retention", os.Getenv("GOLOAD_RETENTION"),
 		`delete finished runs older than this, checked at start and hourly: e.g. 90d, 720h (min 1h; 0 or empty = keep forever). A test's baseline and latest run are always kept`)
+	publicURL := flags.String("public-url", os.Getenv("GOLOAD_PUBLIC_URL"),
+		`externally reachable base URL of this server (e.g. https://goload.example.com), used for links in notifications; empty = no links`)
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -105,6 +109,15 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	}
 
 	ropts := runner.Options{Store: st, Version: version, Logger: log, Allow: allow.Check}
+	// Notifications (Slack / webhook) when runs and suite runs finish. Every
+	// built-in store keeps the channels.
+	var notifier *notify.Notifier
+	var onSuiteFinish func(model.SuiteRun)
+	if ns, ok := st.(store.NotificationStore); ok {
+		notifier = notify.New(notify.Options{Store: ns, PublicURL: *publicURL, Logger: log})
+		ropts.OnFinish = notifier.RunFinished
+		onSuiteFinish = notifier.SuiteFinished
+	}
 	if *grpcAddr != "" {
 		if *workerToken == "" {
 			fmt.Fprintln(stderr, "serve: -worker-token (or GOLOAD_WORKER_TOKEN) is required with -grpc-addr; use -grpc-addr \"\" for single-node mode")
@@ -162,7 +175,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	// by a previous process are recorded as error (like runs above).
 	var suites *suite.Service
 	if ss, ok := st.(suite.Store); ok {
-		suites = suite.New(suite.Options{Store: ss, Runner: mgr, Logger: log})
+		suites = suite.New(suite.Options{Store: ss, Runner: mgr, Logger: log, OnFinish: onSuiteFinish})
 		if n, err := suites.Recover(ctx); err != nil {
 			log.Warn("recover suite runs", "error", err)
 		} else if n > 0 {
@@ -182,6 +195,7 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 			Logger: log, AuthToken: *token, DevCORS: *devCORS, Retention: retention,
 			Scheduler: schedulerOrNil(sched),
 			Suites:    suitesOrNil(suites),
+			Notifier:  notifierOrNil(notifier),
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -222,7 +236,20 @@ func cmdServe(args []string, stdout, stderr io.Writer) int {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Warn("http shutdown", "error", err)
 	}
+	// Last: runs stopped above may still have notifications queued.
+	if notifier != nil {
+		notifier.Close(shutdownCtx)
+	}
 	return exitOK
+}
+
+// notifierOrNil keeps a nil *Notifier from becoming a non-nil
+// api.NotificationSender interface value.
+func notifierOrNil(n *notify.Notifier) api.NotificationSender {
+	if n == nil {
+		return nil
+	}
+	return n
 }
 
 // schedulerOrNil keeps a nil *Scheduler from becoming a non-nil
