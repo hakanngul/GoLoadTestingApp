@@ -324,7 +324,7 @@ export GOLOAD_TOKEN=...
 claude mcp add goload -e GOLOAD_TOKEN="$GOLOAD_TOKEN" -- goloadtest mcp --server https://goload.internal.example
 ```
 
-Use `--read-only` to hide every tool that changes anything. Setup for each client, security notes and the tool list: [`docs/mcp.md`](docs/mcp.md); config examples in [`examples/mcp/`](examples/mcp/).
+Use `--read-only` to hide every tool that changes anything. To let remote agents connect by URL instead, start the server with `serve -mcp` (endpoint `/mcp`; the caller's bearer token is forwarded to the API). Setup for each client, security notes and the tool list: [`docs/mcp.md`](docs/mcp.md); config examples in [`examples/mcp/`](examples/mcp/).
 
 ## Notifications
 
@@ -390,6 +390,27 @@ See [docs/security.md](docs/security.md). In short:
 - `serve` refuses to start without a target allowlist; redirects to hosts that are not on it are not followed.
 - `GOLOAD_TOKEN` protects the API and UI.
 - `GOLOAD_WORKER_TOKEN` protects the worker port.
+
+### API tokens and audit
+
+`serve -token` is the **master token**: it has the `admin` scope and is meant for you and for creating other tokens. For CI jobs and AI agents create a **scoped API token** instead, so each one can be limited and revoked on its own (requires `serve -token`; with auth disabled `/api/tokens` answers 409):
+
+```
+curl -X POST -H "Authorization: Bearer $MASTER" -H 'Content-Type: application/json' \
+  https://goload.example.com/api/tokens -d '{"name":"kiro-hakan","scope":"run","expires_in_days":90}'
+# {"token":{"id":"…","name":"kiro-hakan","scope":"run","prefix":"glt_AbCd",…},"secret":"glt_AbCd…"}
+```
+
+The `secret` is shown **once**; only its SHA-256 and the first 8 characters (`prefix`, to recognise it) are stored. Use it exactly like the master token (`Authorization: Bearer glt_…`, or `GOLOAD_TOKEN` for `remote run` and `mcp`; the SSE stream also accepts `?access_token=`). `expires_in_days` is optional (0 = never, at most 365); an expired token is rejected with 401. Revoke with `DELETE /api/tokens/{id}`, which takes effect immediately; `GET /api/tokens` lists tokens with `last_used_at`, and `GET /api/me` tells a caller who it is authenticated as.
+
+| Scope | Allows |
+| --- | --- |
+| `read` | every `GET`, plus `POST /api/validate` and `POST /api/schedules/preview` |
+| `run` | `read` + try a test, start and stop runs, start and stop suite runs, schedule run-now |
+| `write` | `run` + every other change: tests, files, run labels and deletes, baselines, suites, schedules, notification channels |
+| `admin` | everything, including `/api/tokens` (the master token) |
+
+A request above a token's scope is answered with 403 (`this token has scope "read"; "run" is needed`). Runs and suite runs record who started them in `started_by`, shown in the API and in Slack/webhook notifications: `admin` (master token), `token:<name>`, `schedule:<schedule name>` for timed schedule fires (a manual *run now* records the caller), and empty when auth is disabled or for runs from before this feature.
 
 ## Development
 

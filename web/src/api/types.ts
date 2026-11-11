@@ -51,6 +51,8 @@ export interface Run {
   schedule_id?: string;
   /** Protected from retention pruning (absent = not pinned). */
   pinned?: boolean;
+  /** "admin", "token:<name>", "schedule:<name>" or empty. */
+  started_by?: string;
 }
 
 export interface Summary {
@@ -559,6 +561,8 @@ export interface SuiteRun {
   finished_at?: string;
   items: SuiteRunItem[];
   error?: string;
+  /** "admin", "token:<name>", "schedule:<name>" or empty. */
+  started_by?: string;
 }
 
 // ---------- notifications ----------
@@ -597,4 +601,39 @@ export interface NotificationRequest {
 export interface NotificationTestResult {
   ok: boolean;
   error?: string;
+}
+
+// ---------- identity & API tokens ----------
+
+export type TokenScope = 'read' | 'run' | 'write' | 'admin';
+
+/** GET /api/me. kind "none" = auth disabled (scope admin). */
+export interface Me {
+  kind: 'none' | 'master' | 'token';
+  name: string;
+  scope: TokenScope;
+}
+
+export interface APIToken {
+  id: string;
+  name: string;
+  scope: TokenScope;
+  /** First characters of the secret, e.g. "glt_abcd". */
+  prefix: string;
+  created_at: string;
+  last_used_at?: string;
+  expires_at?: string;
+}
+
+export interface CreateTokenRequest {
+  name: string;
+  scope: TokenScope;
+  /** 0 / omitted = never, max 365. */
+  expires_in_days?: number;
+}
+
+/** The secret is returned only once, by the create call. */
+export interface CreateTokenResponse {
+  token: APIToken;
+  secret: string;
 }

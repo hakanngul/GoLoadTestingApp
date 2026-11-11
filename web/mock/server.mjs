@@ -8,6 +8,8 @@
 //   MOCK_PROVISIONER=0    no cloud provisioner: asking for more workers than are idle
 //                         returns 409 "not enough idle workers" (default: provisioner on,
 //                         such runs start `queued` while spot instances "launch")
+//   MOCK_AUTH=none        pretend auth is disabled: /api/me says kind "none" and /api/tokens
+//                         answers 409 (the UI shows "start the server with -token")
 //   MOCK_QUEUE_S=150      how long the queued run seeded at boot stays queued
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
@@ -1449,6 +1451,37 @@ function withLastRun(t) {
   return last ? { ...t, last_run: last } : t;
 }
 
+// ---------------------------------------------------------------- API tokens
+const AUTH_OFF = process.env.MOCK_AUTH === 'none';
+const apiTokens = [];
+function addToken(name, scope, ageD, usedAgoH, expiresInD) {
+  const t = {
+    id: 'tok_' + hex(8),
+    name,
+    scope,
+    prefix: 'glt_' + hex(4),
+    created_at: iso(Date.now() - ageD * 86400e3),
+  };
+  if (usedAgoH !== null) t.last_used_at = iso(Date.now() - usedAgoH * 3600e3);
+  if (expiresInD !== null) t.expires_at = iso(Date.now() + expiresInD * 86400e3);
+  apiTokens.unshift(t);
+  return t;
+}
+addToken('grafana-viewer', 'read', 40, null, null);
+addToken('ci-main', 'run', 20, 3, 70);
+addToken('kiro-hakan', 'run', 9, 0.2, 81);
+addToken('old-laptop', 'write', 200, 24 * 60, -3);
+
+// Attribute seeded runs to different starters so "started by" shows up in the UI.
+{
+  const who = ['admin', 'token:kiro-hakan', 'token:ci-main', '', 'schedule:Nightly soak'];
+  let i = 0;
+  for (const r of [...runs.values()].sort((x, y) => x.started_at.localeCompare(y.started_at))) {
+    const w = r.schedule_id ? 'schedule:' + r.schedule_id : who[i++ % who.length];
+    if (w) r.started_by = w;
+  }
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
@@ -1468,6 +1501,36 @@ const server = createServer(async (req, res) => {
         res.setHeader('WWW-Authenticate', 'Bearer realm="api"');
         return apiErr(res, 401, 'unauthorized');
       }
+    }
+
+    if (a === 'me' && m === 'GET') {
+      return send(res, 200, { kind: AUTH_OFF ? 'none' : 'master', name: AUTH_OFF ? '' : 'admin', scope: 'admin' });
+    }
+
+    if (a === 'tokens') {
+      if (AUTH_OFF) return apiErr(res, 409, 'API tokens need serve -token (auth is disabled)');
+      if (!b && m === 'GET') return send(res, 200, apiTokens);
+      if (!b && m === 'POST') {
+        const body = await readJSON(req);
+        const errs = [];
+        const name = String(body?.name ?? '').trim();
+        if (!name) errs.push('name: is required');
+        if (name.length > 100) errs.push('name: must be at most 100 characters');
+        if (!['read', 'run', 'write', 'admin'].includes(body?.scope)) errs.push('scope: must be read, run, write or admin');
+        const days = Number(body?.expires_in_days ?? 0);
+        if (!Number.isInteger(days) || days < 0 || days > 365) errs.push('expires_in_days: must be between 0 and 365');
+        if (errs.length) return apiErr(res, 400, 'invalid token', errs);
+        if (apiTokens.some((t) => t.name === name)) return apiErr(res, 409, `a token named "${name}" already exists`);
+        const t = addToken(name, body.scope, 0, null, days > 0 ? days : null);
+        return send(res, 201, { token: t, secret: t.prefix + hex(24) });
+      }
+      if (b && m === 'DELETE') {
+        const i = apiTokens.findIndex((t) => t.id === b);
+        if (i < 0) return apiErr(res, 404, `token ${b} not found`);
+        apiTokens.splice(i, 1);
+        return send(res, 204);
+      }
+      return apiErr(res, 405, 'method not allowed');
     }
 
     if (a === 'validate' && m === 'POST') {
@@ -1592,6 +1655,7 @@ const server = createServer(async (req, res) => {
             `cluster: not enough idle workers: ${want} requested, ${idle} idle`,
           ]);
         const run = createRun(t.id, want, 0, want > 1 && want > idle ? LAUNCH_S : 0, body);
+        run.started_by = 'admin';
         return send(res, 201, run);
       }
       return apiErr(res, 405, 'method not allowed');

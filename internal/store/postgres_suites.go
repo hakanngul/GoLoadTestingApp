@@ -27,16 +27,16 @@ const (
 	pgDeleteSuiteSQL = `DELETE FROM suites WHERE id = $1`
 
 	pgGetSuiteRunSQL = `SELECT id::text, suite_id::text, suite_name, status, mode, stop_on_failure, gap_ms,
-	label, started_at, finished_at, items::text, error FROM suite_runs WHERE id = $1`
+	label, started_at, finished_at, items::text, error, started_by FROM suite_runs WHERE id = $1`
 
 	pgListSuiteRunsSQL = `SELECT id::text, suite_id::text, suite_name, status, mode, stop_on_failure, gap_ms,
-	label, started_at, finished_at, items::text, error FROM suite_runs
+	label, started_at, finished_at, items::text, error, started_by FROM suite_runs
 	WHERE ($1 = '' OR suite_id::text = $1) AND (NOT $2 OR status IN ('queued', 'running'))
 	ORDER BY started_at DESC, id DESC LIMIT $3`
 
 	pgCreateSuiteRunSQL = `INSERT INTO suite_runs (id, suite_id, suite_name, status, mode, stop_on_failure,
-	gap_ms, label, started_at, finished_at, items, error)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)`
+	gap_ms, label, started_at, finished_at, items, error, started_by)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)`
 
 	pgUpdateSuiteRunSQL = `UPDATE suite_runs SET status = $2, finished_at = $3, items = $4::jsonb, error = $5
 	WHERE id = $1`
@@ -68,7 +68,7 @@ func scanPgSuiteRun(row pgx.Row) (model.SuiteRun, error) {
 		finished            *time.Time
 	)
 	if err := row.Scan(&r.ID, &r.SuiteID, &r.SuiteName, &status, &mode, &r.StopOnFailure, &r.GapMs,
-		&r.Label, &r.StartedAt, &finished, &items, &r.Error); err != nil {
+		&r.Label, &r.StartedAt, &finished, &items, &r.Error, &r.StartedBy); err != nil {
 		return model.SuiteRun{}, mapErr(err)
 	}
 	var err error
@@ -181,7 +181,7 @@ func (p *Postgres) CreateSuiteRun(ctx context.Context, r model.SuiteRun) (model.
 	err = pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, pgCreateSuiteRunSQL, id, r.SuiteID, r.SuiteName, string(r.Status),
 			string(r.Mode), r.StopOnFailure, r.GapMs, r.Label, normTime(r.StartedAt), pgOptTime(r.FinishedAt),
-			items, r.Error); err != nil {
+			items, r.Error, r.StartedBy); err != nil {
 			return mapErr(err)
 		}
 		out, err = scanPgSuiteRun(tx.QueryRow(ctx, pgGetSuiteRunSQL, id))

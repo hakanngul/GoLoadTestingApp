@@ -4,6 +4,8 @@ import { api, clearToken, getToken, onUnauthorized } from './api/client';
 import { ThemeToggle } from './components/ThemeToggle';
 import { BrandMark, Icon, Loading } from './components/ui';
 import { useAsync } from './lib/hooks';
+import { MeProvider, useMe } from './lib/me';
+import { scopeAllows } from './lib/tokens';
 import { NotFound } from './pages/NotFound';
 import { SignInPage } from './pages/SignInPage';
 
@@ -21,6 +23,7 @@ const SuitesPage = lazy(() => import('./pages/SuitesPage').then((m) => ({ defaul
 const SuitePage = lazy(() => import('./pages/SuitePage').then((m) => ({ default: m.SuitePage })));
 const SuiteRunPage = lazy(() => import('./pages/SuiteRunPage').then((m) => ({ default: m.SuiteRunPage })));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then((m) => ({ default: m.NotificationsPage })));
+const TokensPage = lazy(() => import('./pages/TokensPage').then((m) => ({ default: m.TokensPage })));
 const WorkersPage = lazy(() => import('./pages/WorkersPage').then((m) => ({ default: m.WorkersPage })));
 
 /**
@@ -47,11 +50,17 @@ export function App() {
   }, []);
 
   if (needAuth) return <SignInPage onSignedIn={signedIn} />;
-  return <Shell key={epoch} hasToken={hasToken} onSignOut={signOut} />;
+  return (
+    <MeProvider key={epoch}>
+      <Shell hasToken={hasToken} onSignOut={signOut} />
+    </MeProvider>
+  );
 }
 
 function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => void }) {
   const loc = useLocation();
+  const { me } = useMe();
+  const isAdmin = me ? scopeAllows(me.scope, 'admin') : false;
   const health = useAsync(() => api.health(), [], 15000);
   const up = health.data?.status === 'ok';
   return (
@@ -84,6 +93,11 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             <NavLink to="/notifications">
               <Icon name="bell" /> Notifications
             </NavLink>
+            {isAdmin && (
+              <NavLink to="/tokens">
+                <Icon name="key" /> API tokens
+              </NavLink>
+            )}
             <NavLink to="/workers">
               <Icon name="workers" /> Workers
             </NavLink>
@@ -106,6 +120,11 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
         </div>
       </aside>
       <main className="main">
+        {me?.scope === 'read' && (
+          <div className="alert info readonly-banner no-print" role="status" style={{ marginBottom: 16 }}>
+            <b>Read-only access.</b> You can view everything, but not start runs or change anything.
+          </div>
+        )}
         <Suspense fallback={<Loading />}>
           <Routes>
             <Route path="/" element={<TestsPage />} />
@@ -121,6 +140,7 @@ function Shell({ hasToken, onSignOut }: { hasToken: boolean; onSignOut: () => vo
             <Route path="/reports/tests/:id" element={<TestReportPage />} />
             <Route path="/compare" element={<ComparePage />} />
             <Route path="/notifications" element={<NotificationsPage />} />
+            <Route path="/tokens" element={<TokensPage />} />
             <Route path="/workers" element={<WorkersPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

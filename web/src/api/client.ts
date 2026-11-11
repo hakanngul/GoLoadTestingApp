@@ -1,5 +1,9 @@
 import type {
   APIErrorBody,
+  APIToken,
+  CreateTokenRequest,
+  CreateTokenResponse,
+  Me,
   CompareResult,
   ErrorGroup,
   ErrorSample,
@@ -29,6 +33,7 @@ import type {
   ValidateResult,
   Worker,
 } from './types';
+import { forbiddenMessage } from '../lib/tokens';
 import { windowParams, type WindowSel } from '../lib/report';
 
 export const TOKEN_KEY = 'goload.token';
@@ -153,6 +158,11 @@ export const api = {
   /** Checks a token without touching stored state (GET /api/tests). */
   checkToken: (token: string) =>
     request<unknown>('GET', '/api/tests', undefined, undefined, { token, quiet401: true }).then(() => undefined),
+
+  getMe: () => request<Me>('GET', '/api/me'),
+  listTokens: () => request<APIToken[] | null>('GET', '/api/tokens').then((r) => r ?? []),
+  createToken: (req: CreateTokenRequest) => request<CreateTokenResponse>('POST', '/api/tokens', req),
+  deleteToken: (id: string) => request<void>('DELETE', `/api/tokens/${enc(id)}`),
 
   listTests: () => request<Test[] | null>('GET', '/api/tests').then((r) => r ?? []),
   getTest: (id: string) => request<Test>('GET', `/api/tests/${enc(id)}`),
@@ -386,7 +396,7 @@ export function subscribeRun(id: string, h: RunStreamHandlers): () => void {
 }
 
 export function errorText(e: unknown): { message: string; details: string[] } {
-  if (e instanceof APIError) return { message: e.message, details: e.details };
+  if (e instanceof APIError) return { message: e.status === 403 ? forbiddenMessage(e.message) : e.message, details: e.details };
   if (e instanceof Error) return { message: e.message, details: [] };
   return { message: String(e), details: [] };
 }

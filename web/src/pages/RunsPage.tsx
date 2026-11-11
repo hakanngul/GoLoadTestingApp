@@ -5,6 +5,7 @@ import { RunLabel } from '../components/report';
 import { ErrorAlert, Icon, Loading, ScheduledBadge, StatusBadge } from '../components/ui';
 import { fmtDateTime, fmtInt, fmtMs, fmtPct, fmtRps, fmtSeconds, runDurationS, shortId, timeAgo } from '../lib/format';
 import { useAsync, useNow } from '../lib/hooks';
+import { formatStartedBy } from '../lib/tokens';
 
 export function RunsPage() {
   const [params, setParams] = useSearchParams();
@@ -107,7 +108,10 @@ export function RunsPage() {
                           {shortId(r.id)}
                         </Link>
                       </td>
-                      <td style={{ fontWeight: 600 }}>{r.test_name}</td>
+                      <td style={{ fontWeight: 600 }}>
+                        {r.test_name}
+                        {r.started_by && <div className="started-by">by {formatStartedBy(r.started_by)}</div>}
+                      </td>
                       <td title={r.notes || undefined}>
                         <span className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
                           {r.label ? <RunLabel label={r.label} /> : !r.schedule_id && <span className="muted">—</span>}
