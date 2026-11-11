@@ -72,7 +72,7 @@ func startRetention(ctx context.Context, st store.Store, keep time.Duration, log
 	if !ok {
 		return nil, fmt.Errorf("store %T does not support retention", st)
 	}
-	log.Info("retention enabled: finished runs are deleted once older than this (baselines and each test's latest run are kept)",
+	log.Info("retention enabled: finished runs are deleted once older than this (pinned runs, baselines and each test's latest run are kept)",
 		"retention", fmtRetention(keep), "check_every", retentionInterval)
 	done := make(chan struct{})
 	go func() {
@@ -122,8 +122,8 @@ func cmdPrune(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, `Usage: goloadtest prune -older-than 30d [-db sqlite:./goload.db] [-dry-run]
 
 Deletes finished runs (with their metrics, error samples and error groups)
-whose finish time is older than -older-than. A test's baseline run and
-each test's latest finished run are always kept; queued and running runs
+whose finish time is older than -older-than. Pinned runs, a test's baseline
+run and each test's latest finished run are always kept; queued and running runs
 are never touched. SQLite files are compacted afterwards.
 
 `)

@@ -138,6 +138,16 @@ func TestUpdateRunMetaAPI(t *testing.T) {
 	if got = decode[model.Run](t, rec); got.Label != "rc-2" || got.Notes != "" {
 		t.Fatalf("PATCH notes = %+v", got)
 	}
+	rec = e.json(t, "PATCH", path, map[string]any{"pinned": true})
+	wantStatus(t, rec, 200)
+	if got = decode[model.Run](t, rec); !got.Pinned || got.Label != "rc-2" {
+		t.Fatalf("PATCH pinned = %+v", got)
+	}
+	rec = e.json(t, "PATCH", path, map[string]any{"pinned": false})
+	wantStatus(t, rec, 200)
+	if got = decode[model.Run](t, rec); got.Pinned {
+		t.Fatalf("PATCH unpin = %+v", got)
+	}
 	rec = e.do(t, "GET", path, nil)
 	if got = decode[model.Run](t, rec); got.Label != "rc-2" {
 		t.Fatalf("GET after PATCH = %+v", got)

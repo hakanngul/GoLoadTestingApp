@@ -66,6 +66,9 @@ type Run struct {
 	// hand). It is set when the run is created and never changes; the
 	// schedule may have been deleted since.
 	ScheduleID string `json:"schedule_id,omitempty"`
+	// Pinned protects the run from retention pruning (set by the user via
+	// PATCH /api/runs/{id}). Deleting the run by hand still works.
+	Pinned bool `json:"pinned,omitempty"`
 }
 
 // Summary is an aggregate over a time window (whole run or one step).
@@ -304,8 +307,9 @@ type StartRunRequest struct {
 
 // UpdateRunRequest is the body of PATCH /api/runs/{id}; nil = unchanged.
 type UpdateRunRequest struct {
-	Label *string `json:"label,omitempty"`
-	Notes *string `json:"notes,omitempty"`
+	Label  *string `json:"label,omitempty"`
+	Notes  *string `json:"notes,omitempty"`
+	Pinned *bool   `json:"pinned,omitempty"`
 }
 
 // ---- Reporting ----

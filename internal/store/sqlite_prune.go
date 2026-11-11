@@ -40,7 +40,7 @@ const sqliteVacuumStep = 4096
 
 // sqlitePrunable is the WHERE condition (alias r for runs) selecting
 // prunable runs; its single parameter is the cutoff in microseconds.
-const sqlitePrunable = `r.status NOT IN ('queued', 'running')
+const sqlitePrunable = `r.status NOT IN ('queued', 'running') AND r.pinned = 0
 	AND COALESCE(r.finished_at, r.started_at) < ?
 	AND NOT EXISTS (SELECT 1 FROM tests t WHERE t.baseline_run_id = r.id)
 	AND r.id <> (SELECT l.id FROM runs l
@@ -50,7 +50,7 @@ const sqlitePrunable = `r.status NOT IN ('queued', 'running')
 // sqlitePruneCandidatesSQL lists the prunable runs, oldest first; its
 // single parameter is the cutoff in microseconds.
 const sqlitePruneCandidatesSQL = `SELECT r.id, r.test_id, r.test_name, r.status, r.started_at, r.finished_at
-		FROM runs r WHERE r.status NOT IN ('queued', 'running')
+		FROM runs r WHERE r.status NOT IN ('queued', 'running') AND r.pinned = 0
 	AND COALESCE(r.finished_at, r.started_at) < ?
 	AND NOT EXISTS (SELECT 1 FROM tests t WHERE t.baseline_run_id = r.id)
 	AND r.id <> (SELECT l.id FROM runs l
@@ -59,7 +59,7 @@ const sqlitePruneCandidatesSQL = `SELECT r.id, r.test_id, r.test_name, r.status,
 
 // sqlitePruneDeleteSQL deletes one run if it is still prunable; its
 // parameters are the run ID and the cutoff in microseconds.
-const sqlitePruneDeleteSQL = `DELETE FROM runs AS r WHERE r.id = ? AND r.status NOT IN ('queued', 'running')
+const sqlitePruneDeleteSQL = `DELETE FROM runs AS r WHERE r.id = ? AND r.status NOT IN ('queued', 'running') AND r.pinned = 0
 	AND COALESCE(r.finished_at, r.started_at) < ?
 	AND NOT EXISTS (SELECT 1 FROM tests t WHERE t.baseline_run_id = r.id)
 	AND r.id <> (SELECT l.id FROM runs l
@@ -68,7 +68,7 @@ const sqlitePruneDeleteSQL = `DELETE FROM runs AS r WHERE r.id = ? AND r.status 
 
 var _ Pruner = (*SQLite)(nil)
 
-// PruneRuns deletes old finished runs except baselines and each test's
+// PruneRuns deletes old finished runs except pinned runs, baselines and each test's
 // latest finished run (see Pruner), then reclaims the freed space.
 func (s *SQLite) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool) ([]PrunedRun, error) {
 	cutoff := toMicros(olderThan)

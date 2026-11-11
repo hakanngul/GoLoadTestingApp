@@ -45,6 +45,7 @@ func runStoreSuite(t *testing.T, newStore func(t *testing.T) Store) {
 		{"MetricsWithSnapshots", testMetricsWithSnapshots},
 		{"RunsSince", testRunsSince},
 		{"PruneRuns", testPruneRuns},
+		{"PruneRunsPinned", testPruneRunsPinned},
 		{"ScheduleCRUD", testScheduleCRUD},
 		{"ScheduleAdvance", testScheduleAdvance},
 		{"ScheduleCascade", testScheduleCascade},

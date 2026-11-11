@@ -94,10 +94,12 @@ With `-retention` the master prunes at start and then every hour, and logs how
 many runs it deleted; `0` (the default) keeps everything, and anything below
 `1h` is rejected. A run is deleted, with its metrics, error samples and error
 groups, once it has finished (any status but queued/running) and its finish
-time (start time if it never recorded one) is older than the retention. Two
-runs are always kept, whatever their age: **a test's baseline run**, and **the
-latest finished run of each test**, so the Tests page, trends and comparisons
-always have something to show. Deleting a test still deletes all of its runs.
+time (start time if it never recorded one) is older than the retention. Some
+runs are always kept, whatever their age: **a test's baseline run**, **the
+latest finished run of each test** (so the Tests page, trends and comparisons
+always have something to show) and any run you **pin** (pin icon on the run
+page; "Pinned runs are never removed by retention"). Deleting a run by hand
+still works for pinned runs. Deleting a test still deletes all of its runs.
 `GET /api/health` reports the active setting as `retention_seconds`, and the
 Runs page shows it.
 

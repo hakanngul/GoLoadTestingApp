@@ -292,7 +292,7 @@ func (m *Memory) UpdateRun(ctx context.Context, r model.Run) error {
 	}
 	next := normRun(cloneRun(r))
 	next.ID, next.TestID = cur.ID, cur.TestID
-	next.Label, next.Notes, next.ScheduleID = cur.Label, cur.Notes, cur.ScheduleID
+	next.Label, next.Notes, next.ScheduleID, next.Pinned = cur.Label, cur.Notes, cur.ScheduleID, cur.Pinned
 	if next.StartedAt.IsZero() {
 		next.StartedAt = cur.StartedAt
 	}
@@ -572,8 +572,8 @@ func normRun(r model.Run) model.Run {
 
 // ---- reporting ---------------------------------------------------------------
 
-// UpdateRunMeta sets label and/or notes (nil = unchanged).
-func (m *Memory) UpdateRunMeta(ctx context.Context, id string, label, notes *string) (model.Run, error) {
+// UpdateRunMeta sets label, notes and/or pinned (nil = unchanged).
+func (m *Memory) UpdateRunMeta(ctx context.Context, id string, label, notes *string, pinned *bool) (model.Run, error) {
 	if err := ctx.Err(); err != nil {
 		return model.Run{}, err
 	}
@@ -588,6 +588,9 @@ func (m *Memory) UpdateRunMeta(ctx context.Context, id string, label, notes *str
 	}
 	if notes != nil {
 		r.Notes = *notes
+	}
+	if pinned != nil {
+		r.Pinned = *pinned
 	}
 	return cloneRun(*r), nil
 }
@@ -684,8 +687,8 @@ func (m *Memory) RunsSince(ctx context.Context, since time.Time) ([]model.Run, e
 
 var _ Pruner = (*Memory)(nil)
 
-// PruneRuns deletes old finished runs except baselines and each test's
-// latest finished run (see Pruner).
+// PruneRuns deletes old finished runs except pinned runs, baselines and
+// each test's latest finished run (see Pruner).
 func (m *Memory) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool) ([]PrunedRun, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -715,7 +718,7 @@ func (m *Memory) PruneRuns(ctx context.Context, olderThan time.Time, dryRun bool
 
 	var out []PrunedRun
 	for _, r := range m.runs {
-		if !prunableStatus(r.Status) || keep[r.ID] {
+		if !prunableStatus(r.Status) || r.Pinned || keep[r.ID] {
 			continue
 		}
 		at := r.StartedAt
